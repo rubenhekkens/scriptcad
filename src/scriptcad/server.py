@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import tempfile
 import threading
 import uuid
@@ -23,6 +24,9 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from platformdirs import user_data_path
+from starlette.concurrency import run_in_threadpool
+
+from . import occt_tools, step_io
 
 WEB = Path(str(files("scriptcad") / "web"))
 # Imported USD files are referenced by path from saved projects, so they live
@@ -118,7 +122,7 @@ def codegen(payload: dict = Body(...)):
 
 
 EXPORTS = {"usd-brep": (".usda", "model.brep.usda"), "usd-mesh": (".usda", "model.mesh.usda"),
-           "usdc": (".usdc", "model.usdc"), "stl": (".stl", "model.stl")}
+           "usdc": (".usdc", "model.usdc"), "stl": (".stl", "model.stl"), "step": (".step", "model.step")}
 
 
 @app.post("/api/export")
@@ -127,26 +131,59 @@ def export(payload: dict = Body(...)):
     if fmt not in EXPORTS:
         raise HTTPException(400, f"unknown format {fmt}")
     suffix, default_name = EXPORTS[fmt]
-    kfmt = "usd-brep" if fmt == "usdc" else fmt
+    source = {"code": payload.get("code", "")} if payload.get("mode") == "script" else {"doc": payload.get("doc", {})}
     fd, path = tempfile.mkstemp(suffix=suffix, prefix="scriptcad_")
     os.close(fd)
-    if payload.get("mode") == "script":
-        worker.run("export", path, kfmt, code=payload.get("code", ""))
+    if fmt == "step":
+        work = Path(tempfile.mkdtemp(prefix="scriptcad_step_"))
+        bodies = worker.run("export_usd_bodies", str(work), **source)
+        try:
+            step_io.usd_to_step(bodies["paths"], path)
+        except step_io.StepError as e:
+            raise HTTPException(400, f"STEP export failed: {e}")
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
     else:
-        worker.run("export", path, kfmt, doc=payload.get("doc", {}))
+        worker.run("export", path, "usd-brep" if fmt == "usdc" else fmt, **source)
     name = re.sub(r"[^\w.\-]+", "_", payload.get("name") or "model") + default_name[len("model"):]
     return FileResponse(path, filename=name, media_type="application/octet-stream")
+
+
+USD_EXT = {".usd", ".usda", ".usdc"}
+STEP_EXT = {".step", ".stp"}
 
 
 @app.post("/api/upload")
 async def upload(request: Request, filename: str = "model.usda"):
     ext = Path(filename).suffix.lower()
-    if ext not in {".usd", ".usda", ".usdc"}:
-        raise HTTPException(400, "only .usd / .usda / .usdc files with BRep data can be imported")
+    if ext not in USD_EXT | STEP_EXT:
+        raise HTTPException(400, "import .step/.stp files, or .usd/.usda/.usdc files with BRep data")
     data = await request.body()
     if len(data) > 200 * 1024 * 1024:
         raise HTTPException(413, "file too large")
-    dest = UPLOADS / f"{uuid.uuid4().hex[:8]}_{re.sub(r'[^\w.-]+', '_', Path(filename).name)}"
+    stem = f"{uuid.uuid4().hex[:8]}_{re.sub(r'[^\w.-]+', '_', Path(filename).name)}"
+    name = Path(filename).name
+
+    if ext in STEP_EXT:
+        folder = UPLOADS / stem
+        folder.mkdir()
+        src = folder / ("source" + ext)
+        src.write_bytes(data)
+        try:
+            parts, failed = await run_in_threadpool(
+                step_io.step_to_usd, src, folder, lambda p: worker.run("inspect_usd", str(p)))
+        except step_io.StepError as e:
+            shutil.rmtree(folder, ignore_errors=True)
+            raise HTTPException(400, str(e))
+        bodies = [{"path": p["path"], "index": 0, "name": name if len(parts) == 1 else f"{name} [{i}]"}
+                  for i, p in enumerate(parts)]
+        warnings = list(failed)
+        approx = sum(not p["exact"] for p in parts)
+        if approx:
+            warnings.append(f"{approx} part(s) were imported with all faces converted to NURBS")
+        return {"name": name, "bodies": bodies, "warnings": warnings}
+
+    dest = UPLOADS / stem
     dest.write_bytes(data)
     try:
         summary = worker.run("inspect_usd", str(dest))
@@ -154,10 +191,14 @@ async def upload(request: Request, filename: str = "model.usda"):
         dest.unlink(missing_ok=True)
         raise HTTPException(400, f"no editable BRep data in that file - ScriptCAD imports BrepArray prims, "
                                  f"not plain meshes ({e.detail})")
-    if not summary["count"]:
-        dest.unlink(missing_ok=True)
-        raise HTTPException(400, "that USD file contains no BRep prims (only BrepArray data can be edited)")
-    return {"path": str(dest), "name": Path(filename).name, **summary}
+    n = summary["count"]
+    bodies = [{"path": str(dest), "index": i, "name": name if n == 1 else f"{name} [{i}]"} for i in range(n)]
+    return {"name": name, "bodies": bodies, "warnings": []}
+
+
+@app.get("/api/step")
+def step_status():
+    return step_io.status()
 
 
 @app.exception_handler(HTTPException)
@@ -174,7 +215,14 @@ def main():
     parser = argparse.ArgumentParser(prog="scriptcad", description="CAD in the browser on NVIDIA's USD BRep kernel.")
     parser.add_argument("--port", type=int, default=int(os.environ.get("SCRIPTCAD_PORT", "8765")))
     parser.add_argument("--no-browser", action="store_true", help="don't open a browser tab")
+    parser.add_argument("--install-step-tools", action="store_true",
+                        help="download the STEP converters now instead of on first use, then exit")
     args = parser.parse_args()
+    if args.install_step_tools:
+        occt_tools.install()
+        if not step_io.ocp_available():
+            print('note: STEP also needs OpenCASCADE: pip install "scriptcad[step]"')
+        return
     url = f"http://127.0.0.1:{args.port}"
     print(f"ScriptCAD running at {url}  (Ctrl+C to stop)")
     if not args.no_browser:

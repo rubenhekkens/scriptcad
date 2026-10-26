@@ -7,14 +7,14 @@ There are two ways to model, and both use the same viewport:
 
 - **Model** is a parametric feature history: primitives, sketch extrude/revolve,
   booleans, fillet/chamfer on picked edges, shell with picked faces, offset,
-  move/copy, linear and circular patterns, and USD BRep import. When you edit a
+  move/copy, linear and circular patterns, and STEP and USD BRep import. When you edit a
   feature, everything after it regenerates.
 - **Script** is plain Python against the kernel (`sm` = `usd_brep`, `show(brep)`
   to display), with `sm.` autocompletion. **From history** turns the feature
   tree into the equivalent script. That works because the history is compiled
   to exactly that code.
 
-Exports: exact BRep as OpenUSD (`.usda` / `.usdc`, `BrepArray` prims),
+Exports: STEP (AP214), exact BRep as OpenUSD (`.usda` / `.usdc`, `BrepArray` prims),
 tessellated `UsdGeomMesh`, and STL.
 
 ## Install and run
@@ -40,6 +40,41 @@ The browser opens at http://127.0.0.1:8765. Options: `--port 9000`, `--no-browse
 To change the per-request kernel timeout (default 90 s), set `SCRIPTCAD_TIMEOUT`.
 Imported USD files are copied to a per-user data folder: `%LOCALAPPDATA%\scriptcad\uploads`
 on Windows, `~/.local/share/scriptcad/uploads` on Linux.
+
+### STEP import and export
+
+STEP support is optional. It needs OpenCASCADE, which ships as a separate wheel:
+
+```bash
+uvx --python 3.12 "scriptcad[step]"      # or: pip install "scriptcad[step]"
+```
+
+Then use **File → Import STEP or USD BRep…** (`Ctrl+I`) and **File → Export STEP**.
+Each solid in a STEP file becomes an editable body.
+
+How it works:
+
+- **Import:** OpenCASCADE reads the STEP file. NVIDIA's `occt_to_usd`
+  converter then turns each solid into the kernel's USD BRep format.
+- **Export:** ScriptCAD's own exporter (`occt_bridge.py`) rebuilds each body from
+  the kernel's exact curves and surfaces in OpenCASCADE and writes AP214 STEP.
+
+NVIDIA's converter isn't in the `usd-brep` wheel. On first STEP import,
+ScriptCAD downloads a prebuilt copy for Windows x86_64 or Linux x86_64, about
+46 MB. It's Julia's [BinaryBuilder](https://github.com/JuliaPackaging/Yggdrasil)
+build of NVIDIA's usd-brep v1.0.0 source, plus its OpenUSD, oneTBB and C++
+runtime libraries. ScriptCAD pins every download by sha256 and unpacks it into
+the per-user data folder. To download ahead of time, run
+`scriptcad --install-step-tools`. To use your own build of usd-brep's tools
+instead, set `SCRIPTCAD_OCCT_TOOLS` to the folder containing `occt_to_usd`.
+
+Known limits of the v1.0.0 converter:
+
+- Some analytic faces fail to translate, for example the apex of a pointed cone.
+  ScriptCAD retries those parts with every surface converted to NURBS and warns
+  when it does. The geometry stays exact, but faces lose their analytic type.
+- NVIDIA reports planar faces bounded by rational B-spline edges importing about
+  0.65% too large ([usd-brep#11](https://github.com/NVIDIA-Omniverse/usd-brep/issues/11)).
 
 ### From source
 

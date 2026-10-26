@@ -43,8 +43,9 @@
           <button data-act="open">Open project… <kbd>Ctrl+O</kbd></button>
           <button data-act="save">Save project <kbd>Ctrl+S</kbd></button>
           <hr>
-          <button data-act="import">Import USD BRep…</button>
+          <button data-act="import">Import STEP or USD BRep… <kbd>Ctrl+I</kbd></button>
           <hr>
+          <button data-act="exp-step">Export STEP (.step)</button>
           <button data-act="exp-usd-brep">Export USD (exact BRep, .usda)</button>
           <button data-act="exp-usdc">Export USD (exact BRep, .usdc)</button>
           <button data-act="exp-usd-mesh">Export USD (UsdGeomMesh)</button>
@@ -141,7 +142,7 @@
 
   <div class="toast" id="toast" hidden></div>
   <input type="file" id="fileOpen" accept=".json,.scad.json" hidden>
-  <input type="file" id="fileUsd" accept=".usd,.usda,.usdc" hidden>
+  <input type="file" id="fileUsd" accept=".step,.stp,.usd,.usda,.usdc" hidden>
 
   <script type="module" src="app.js"></script>
 </body>

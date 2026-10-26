@@ -17,7 +17,10 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
-      - run: uv sync
+      - run: uv sync --extra step
       - run: uv run pytest -v
+        env:
+          # also downloads the pinned STEP converters and runs the round-trip tests
+          SCRIPTCAD_TEST_STEP_TOOLS: "1"
       - name: Build wheel
         run: uv build
