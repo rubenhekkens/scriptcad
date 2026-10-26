@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ScriptCAD</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2 3 7v10l9 5 9-5V7z' fill='%2376b900'/%3E%3Cpath d='m3 7 9 5 9-5M12 12v10' stroke='%230d1117' stroke-width='1.6' fill='none'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css">
+  <link rel="stylesheet" href="vendor/codemirror/addon/hint/show-hint.min.css">
+  <link rel="stylesheet" href="style.css">
+  <script src="vendor/codemirror/codemirror.min.js"></script>
+  <script src="vendor/codemirror/mode/python/python.min.js"></script>
+  <script src="vendor/codemirror/addon/edit/matchbrackets.min.js"></script>
+  <script src="vendor/codemirror/addon/hint/show-hint.min.js"></script>
+  <script type="importmap">
+  { "imports": {
+      "three": "./vendor/three/three.module.js",
+      "three/addons/": "./vendor/three/addons/"
+  } }
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg width="22" height="22" viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7z" fill="var(--accent)"/><path d="m3 7 9 5 9-5M12 12v10" stroke="var(--bg)" stroke-width="1.6" fill="none"/></svg>
+      <span>ScriptCAD</span>
+      <span class="kernel-tag" id="kernelTag" title="Geometry kernel">USD BRep · SMLib</span>
+    </div>
+    <nav class="modes" role="tablist">
+      <button role="tab" data-mode="model" class="on">Model</button>
+      <button role="tab" data-mode="script">Script</button>
+    </nav>
+    <div class="doc-title"><input id="docName" value="Untitled part" spellcheck="false" aria-label="Document name"></div>
+    <div class="top-actions">
+      <button class="tb" id="btnUndo" title="Undo (Ctrl+Z)"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
+      <button class="tb" id="btnRedo" title="Redo (Ctrl+Y)"><svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></svg></button>
+      <span class="sep"></span>
+      <div class="menu">
+        <button class="tb wide" id="btnFile">File <svg viewBox="0 0 24 24" class="chev"><path d="m6 9 6 6 6-6"/></svg></button>
+        <div class="menu-pop" id="fileMenu">
+          <button data-act="new">New part</button>
+          <button data-act="example">Load example part</button>
+          <button data-act="open">Open project… <kbd>Ctrl+O</kbd></button>
+          <button data-act="save">Save project <kbd>Ctrl+S</kbd></button>
+          <hr>
+          <button data-act="import">Import USD BRep…</button>
+          <hr>
+          <button data-act="exp-usd-brep">Export USD (exact BRep, .usda)</button>
+          <button data-act="exp-usdc">Export USD (exact BRep, .usdc)</button>
+          <button data-act="exp-usd-mesh">Export USD (UsdGeomMesh)</button>
+          <button data-act="exp-stl">Export STL</button>
+          <button data-act="png">Save screenshot (PNG)</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="ribbon" id="ribbon"></div>
+
+  <main class="work">
+    <aside class="left" id="leftPane">
+      <section class="panel tree-panel" id="treePanel">
+        <div class="panel-h"><span>History</span><span class="muted" id="featCount"></span></div>
+        <ol class="tree" id="tree"></ol>
+        <div class="panel-h sub"><span>Bodies</span></div>
+        <ul class="bodies" id="bodyList"></ul>
+      </section>
+      <section class="panel script-panel" id="scriptPanel" hidden>
+        <div class="panel-h">
+          <span>script.py</span>
+          <span class="grow"></span>
+          <button class="chip" id="btnFromHistory" title="Replace the script with code generated from the feature history">From history</button>
+          <button class="chip accent" id="btnRun" title="Run (Ctrl+Enter)">▶ Run</button>
+        </div>
+        <div class="editor" id="editor"></div>
+        <div class="console-h"><span>Output</span><button class="chip ghost" id="btnClearOut">Clear</button></div>
+        <pre class="console" id="console"></pre>
+      </section>
+      <div class="resizer" id="resizer"></div>
+    </aside>
+
+    <section class="viewport" id="viewport">
+      <div class="vp-tools top-left">
+        <div class="seg" id="selMode" title="Selection filter">
+          <button data-sel="body" class="on" title="Select bodies (1)">Body</button>
+          <button data-sel="face" title="Select faces (2)">Face</button>
+          <button data-sel="edge" title="Select edges (3)">Edge</button>
+        </div>
+        <div class="seg" id="dispMode" title="Display">
+          <button data-disp="shaded-edges" class="on" title="Shaded with edges">Shaded</button>
+          <button data-disp="shaded" title="Shaded, no edges">Smooth</button>
+          <button data-disp="wire" title="BRep edges only">Wire</button>
+          <button data-disp="xray" title="Transparent">X-ray</button>
+        </div>
+      </div>
+      <div class="vp-tools top-right">
+        <div class="seg views">
+          <button data-view="iso" title="Isometric (0)">Iso</button>
+          <button data-view="top" title="Top (7)">Top</button>
+          <button data-view="front" title="Front (1)">Front</button>
+          <button data-view="right" title="Right (3)">Right</button>
+          <button data-view="fit" title="Fit all (F)">Fit</button>
+        </div>
+      </div>
+      <canvas class="gizmo" id="gizmo" title="Click an axis to look along it"></canvas>
+      <div class="section-ctl" id="sectionCtl" hidden>
+        <span>Section</span>
+        <div class="seg small" id="secAxis"><button data-ax="x">X</button><button data-ax="y">Y</button><button data-ax="z" class="on">Z</button></div>
+        <input type="range" id="secT" min="0" max="1" step="0.001" value="0.5" aria-label="Section position">
+        <button class="chip ghost" id="secFlip" title="Flip side">⇅</button>
+        <button class="chip ghost" id="secClose" title="Close section">✕</button>
+      </div>
+      <div class="measure-label" id="measureLabel" hidden></div>
+      <div class="busy" id="busy" hidden><span class="spin"></span>Regenerating…</div>
+      <div class="empty" id="emptyHint">
+        <h2>Start a part</h2>
+        <p>Pick a primitive or sketch feature from the toolbar, or open the <b>Script</b> tab and write <code>usd_brep</code> Python directly.</p>
+        <button class="chip accent" data-act="example">Load the example part</button>
+      </div>
+    </section>
+
+    <aside class="right" id="rightPane">
+      <section class="panel" id="propPanel">
+        <div class="panel-h"><span id="propTitle">Properties</span></div>
+        <div class="props" id="props"></div>
+      </section>
+      <section class="panel" id="infoPanel">
+        <div class="panel-h"><span>Inspect</span></div>
+        <div class="info" id="info"></div>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="status">
+    <span class="dot" id="kDot"></span><span id="kStatus">Connecting to kernel…</span>
+    <span class="grow"></span>
+    <span id="hoverInfo" class="muted"></span>
+    <span class="sep"></span>
+    <span id="units" class="muted">mm</span>
+  </footer>
+
+  <div class="toast" id="toast" hidden></div>
+  <input type="file" id="fileOpen" accept=".json,.scad.json" hidden>
+  <input type="file" id="fileUsd" accept=".usd,.usda,.usdc" hidden>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

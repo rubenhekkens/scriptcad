@@ -1,0 +1,19 @@
+{
+  "name": "Bearing bracket",
+  "features": [
+    {"id": "plate", "type": "box", "name": "Base plate", "params": {"x": 0, "y": 0, "z": 0, "l": 80, "w": 50, "h": 8}},
+    {"id": "corners", "type": "fillet", "name": "Corner rounds", "params": {"kind": "fillet", "target": "plate", "radius": 6, "edges": [[0, 0, 4], [80, 0, 4], [80, 50, 4], [0, 50, 4]]}},
+    {"id": "boss", "type": "cylinder", "name": "Boss", "params": {"x": 40, "y": 25, "z": 0, "r": 14, "h": 28}},
+    {"id": "u1", "type": "boolean", "name": "Join boss", "params": {"op": "union", "target": "plate", "tool": "boss", "keep_tool": false}},
+    {"id": "rib", "type": "extrude", "name": "Rib", "params": {"plane": "XZ", "profile": "polyline", "points": "50,7; 76,7; 50,24", "dist": 4, "offset": -27, "cx": 0, "cy": 0}},
+    {"id": "ribs", "type": "pattern", "name": "Rib pair", "params": {"target": "rib", "mode": "polar", "count": 2, "axis": "Z", "angle": 360, "px": 40, "py": 25, "pz": 0}},
+    {"id": "u2", "type": "boolean", "name": "Join ribs", "params": {"op": "union", "target": "plate", "tool": "rib", "keep_tool": false}},
+    {"id": "bore", "type": "cylinder", "name": "Bore", "params": {"x": 40, "y": 25, "z": -1, "r": 8, "h": 31}},
+    {"id": "d1", "type": "boolean", "name": "Cut bore", "params": {"op": "difference", "target": "plate", "tool": "bore", "keep_tool": false}},
+    {"id": "hole", "type": "cylinder", "name": "Bolt hole", "params": {"x": 9, "y": 9, "z": -1, "r": 3.2, "h": 10}},
+    {"id": "hx", "type": "pattern", "name": "Holes X", "params": {"target": "hole", "mode": "linear", "count": 2, "dx": 62, "dy": 0, "dz": 0}},
+    {"id": "hy", "type": "pattern", "name": "Holes Y", "params": {"target": "hole", "mode": "linear", "count": 2, "dx": 0, "dy": 32, "dz": 0}},
+    {"id": "d2", "type": "boolean", "name": "Cut holes", "params": {"op": "difference", "target": "plate", "tool": "hole", "keep_tool": false}},
+    {"id": "ch", "type": "fillet", "name": "Bore chamfer", "params": {"kind": "chamfer", "target": "plate", "radius": 1.5, "edges": [[48, 25, 28]]}}
+  ]
+}
