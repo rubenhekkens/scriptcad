@@ -21,6 +21,10 @@ classifiers = [
     "Topic :: Multimedia :: Graphics :: 3D Modeling",
 ]
 
+[project.optional-dependencies]
+# OpenCASCADE, for STEP import/export (LGPL-2.1, used unmodified as a separate wheel)
+step = ["cadquery-ocp>=7.8,<9"]
+
 [project.scripts]
 scriptcad = "scriptcad.server:main"
 

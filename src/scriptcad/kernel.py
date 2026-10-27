@@ -655,9 +655,29 @@ def _write_stl(breps, path):
         fh.write("endsolid scriptcad\n")
 
 
+def export_usd_bodies(out_dir, doc=None, code=None):
+    """Write each body to its own BrepArray .usda (input for the STEP exporter)."""
+    breps, names = _collect(doc, code)
+    if not breps:
+        raise ValueError("nothing to export - the model has no bodies")
+    paths = []
+    for i, b in enumerate(breps):
+        p = os.path.join(out_dir, f"body_{i}.usda")
+        sm.usd.export_brep(b, p)
+        paths.append(p)
+    return {"paths": paths, "names": names,
+            "volumes": [b.volume() if b.is_manifold_solid() else None for b in breps]}
+
+
 def inspect_usd(path):
     breps = sm.usd.import_breps(path)
-    return {"count": len(breps), "bodies": [{"faces": b.face_count(), "edges": b.edge_count()} for b in breps]}
+    if not breps:
+        raise ValueError("no BRep bodies in file")
+    for b in breps:
+        if b.face_count() == 0:
+            raise ValueError("empty BRep body")
+    return {"count": len(breps), "bodies": [{"faces": b.face_count(), "edges": b.edge_count(),
+                                             "manifold": bool(b.is_manifold_solid())} for b in breps]}
 
 
 def warmup():

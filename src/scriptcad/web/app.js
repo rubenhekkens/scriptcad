@@ -903,21 +903,26 @@ $('#fileUsd').addEventListener('change', async e => {
   e.target.value = '';
   if (!file) return;
   try {
+    const isStep = /\.(step|stp)$/i.test(file.name);
     setKernel('warn', `Importing ${file.name}…`);
-    const r = await fetch(`/api/upload?filename=${encodeURIComponent(file.name)}`, { method: 'POST', body: file });
+    $('#busy').hidden = false;
+    // the first STEP import downloads the converters (~46 MB), so say so if it takes a while
+    const slow = isStep && setTimeout(() => setKernel('warn', `Importing ${file.name}… (first STEP import downloads the converters, ~46 MB)`), 4000);
+    const r = await fetch(`/api/upload?filename=${encodeURIComponent(file.name)}`, { method: 'POST', body: file }).finally(() => { clearTimeout(slow); $('#busy').hidden = true; });
     const res = await r.json();
     if (!r.ok) throw new Error(res.detail);
     if (S.mode !== 'model') setMode('model');
     if (S.editing) finishEdit();
     const before = snap();
-    for (let i = 0; i < res.count; i++) {
-      S.doc.features.push({ id: uid(), type: 'import', name: res.count > 1 ? `${res.name} [${i}]` : res.name, params: { file: res.path, file_name: res.name, index: i } });
+    for (const b of res.bodies) {
+      S.doc.features.push({ id: uid(), type: 'import', name: b.name, params: { file: b.path, file_name: res.name, index: b.index } });
     }
     commit(before);
     firstFit = true;
     renderAll();
     scheduleRegen(0);
-    toast(`Imported ${res.count} BRep bod${res.count === 1 ? 'y' : 'ies'} from ${res.name}`);
+    const n = res.bodies.length;
+    toast(`Imported ${n} bod${n === 1 ? 'y' : 'ies'} from ${res.name}` + (res.warnings.length ? ` - ${res.warnings.join('; ')}` : ''), res.warnings.length > 0);
   } catch (err) { setKernel('bad', err.message); toast(err.message, true); }
 });
 
@@ -938,6 +943,7 @@ const ACTIONS = {
   open: () => $('#fileOpen').click(), import: () => $('#fileUsd').click(),
   'exp-usd-brep': () => exportAs('usd-brep'), 'exp-usdc': () => exportAs('usdc'),
   'exp-usd-mesh': () => exportAs('usd-mesh'), 'exp-stl': () => exportAs('stl'),
+  'exp-step': () => exportAs('step'),
   png: () => fetch(viewer.screenshot()).then(r => r.blob()).then(b => download(b, `${S.doc.name || 'view'}.png`)),
 };
 
@@ -960,6 +966,7 @@ document.addEventListener('keydown', e => {
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); return saveProject(); }
   if (mod && e.key.toLowerCase() === 'o') { e.preventDefault(); return ACTIONS.open(); }
+  if (mod && e.key.toLowerCase() === 'i') { e.preventDefault(); return ACTIONS.import(); }
   if (typing) {
     if (e.key === 'Enter' && e.target.closest('.props') && e.target.tagName !== 'TEXTAREA') { e.target.blur(); finishEdit(); }
     return;
