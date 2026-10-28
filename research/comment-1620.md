@@ -10,4 +10,4 @@ It covers all the fundamentals, accuracy sources and programs listed above. Thes
 
 The About section includes a short personal spike: a voxel solver running in WebGPU in the browser, measured against closed-form results.
 
-Gaps are listed under Open questions. The biggest are community vote counts and the paywalled NAFEMS and ASME material. Corrections are welcome.
+Gaps are listed under Open questions. The biggest are community vote counts and the paywalled NAFEMS and ASME material.
