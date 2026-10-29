@@ -104,6 +104,63 @@ or select two bodies before you press a **Combine** tool. While you pick edges
 or faces for a feature, the model rolls back to the state just before that
 feature.
 
+## Analyze: stress on your GPU, in the browser
+
+![Analyze mode on the example bracket](docs/analyze-mode.jpg)
+
+**Simulate → Analyze** runs a linear-elastic stress analysis of a body and colours it by
+von Mises stress. The solve happens on your GPU through WebGPU, so it needs a recent
+Chrome or Edge, and the simulation extra on the server:
+
+```bash
+uvx --python 3.12 "scriptcad[sim]"        # or: pip install "scriptcad[sim]"
+```
+
+1. Press **Pick** next to *Fixed faces* and click the faces that are held (bolt holes,
+   a clamped face). Then pick *Load faces*.
+2. Choose a load: a total **force** (N), a **pressure** (MPa) or a **torque** (N·m about an
+   axis through the load faces), a material and a resolution.
+3. **Run analysis.** With *Re-run when the model changes* on, every edit to the feature
+   history re-runs it, so you can change a dimension and watch the stress follow.
+
+The example bracket (four bolt holes held, 2 kN down on the bore, ~670k unknowns) solves
+in about 1 s on an RTX 5070 and 1.5 s on Intel integrated graphics.
+
+### Example: less material, more stiffness
+
+**File → Load bridge example** opens three 200 mm steel bridges, each clamped at both ends
+with 2 kN spread over its deck, and runs all three. Supports and loads are set per body;
+material, load and resolution are shared, so the comparison is fair, and every body uses
+the same colour scale and the same deformation scale.
+
+| Design | Mass | Deflection | Stress (99th pct) | Stiffness per gram |
+|---|---:|---:|---:|---:|
+| A · Solid slab | 502 g | 32.6 µm | 29.8 MPa | 1× |
+| B · I-girder | 349 g (−31%) | **10.5 µm** | **15.4 MPa** | **4.5×** |
+| C · Truss | 333 g (−34%) | 19.2 µm | 24.1 MPa | 2.6× |
+
+![Three bridges, stress](docs/bridges-stress.jpg)
+![Three bridges, deformed shape at the same exaggeration](docs/bridges-deformed.jpg)
+
+Material placed far from the middle of the section does the work: the girder's
+flanges give it 7.5× the slab's bending stiffness with less steel. Its deflection is
+higher than bending theory alone (3.9 µm) because the thin web also shears, which adds
+~6 µm and matches the textbook shear term. The truss is stiffer than the slab too, but its
+sharp joints concentrate stress (55.6 MPa peak away from the supports, against the slab's
+35.7 MPa), which is why real trusses use gusset plates.
+
+How to read it:
+
+- **The colour scale stops at the 99th percentile** by default. Next to supports and
+  load faces the peak stress is singular: it keeps rising as the voxels get finer, so the
+  panel shows it as "not converged" and reports the maximum *away* from them separately.
+- It is for **comparing designs**, not sign-off: linear elastic, small deflections, no
+  contact, faces fully fixed, typical material values. See `bench/fea/README.md` for the
+  measured accuracy (a few percent on closed-form benchmarks).
+- On a laptop with two GPUs, browsers often get the integrated one. The panel says which
+  GPU it is using; set your browser to *High performance* in Windows Settings › System ›
+  Display › Graphics and fully restart it for several times faster results.
+
 ## How it works
 
 - `src/scriptcad/kernel.py` holds all the `usd_brep` calls. Each feature compiles to

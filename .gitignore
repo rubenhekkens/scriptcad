@@ -8,3 +8,4 @@ __pycache__/
 # local data and tooling
 /uploads/
 .claude/
+bench/fea/ref_cache/

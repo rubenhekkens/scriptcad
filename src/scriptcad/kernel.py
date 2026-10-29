@@ -704,3 +704,50 @@ def api_names():
         if "(" in d and d.startswith(n):
             docs[n] = d
     return {"top": top, "subs": subs, "sigs": docs}
+
+
+def analysis_geometry(doc, body_id, face_groups, quality="normal"):
+    """The body to analyse, tessellated exactly as the viewer shows it.
+
+    face_groups: {name: [3D reference points]}; each point resolves to the face nearest
+    to it (faces_at). Returns the viewer's flat corner positions and per-triangle face
+    index (same order as regen's mesh), plus the face indices of every group.
+    """
+    snippets, _live, var = compile_history(doc)
+    feats = {f["id"]: f for f in doc.get("features", [])}
+    ns = _namespace([])
+    alive = []
+    for s in snippets:
+        if s.get("skipped") or s["error"]:
+            continue
+        params = feats[s["id"]].get("params", {})
+        backup = {}
+        for key in ("target", "tool"):
+            name = var(params[key]) if params.get(key) else None
+            if name and isinstance(ns.get(name), sm.Brep):
+                backup[name] = sm.brep_copy(ns[name])
+        try:
+            _run(s["code"], ns, io.StringIO())
+            for c in s["consumes"]:
+                if c in alive:
+                    alive.remove(c)
+            alive.extend(s["creates"])
+        except Exception:
+            for c in s["creates"]:
+                ns.pop(var(c), None)
+            ns.update(backup)
+    if body_id not in alive or var(body_id) not in ns:
+        raise ValueError(f"body '{body_id}' does not exist in the current model")
+    brep = ns[var(body_id)]
+    if not brep.is_manifold_solid():
+        raise ValueError("only closed solids can be analysed (this body is an open sheet)")
+    m = mesh_body(brep, quality)
+    faces = brep.faces()
+    groups = {}
+    for name, refs in face_groups.items():
+        idx = []
+        for f in faces_at(brep, refs or []):
+            idx.append(faces.index(f))
+        groups[name] = idx
+    return {"positions": m["positions"], "normals": m["normals"], "triFace": m["triFace"],
+            "groups": groups, "volume": m["props"]["volume"], "bbox": m["props"]["bbox"]}

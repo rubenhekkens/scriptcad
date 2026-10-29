@@ -8,6 +8,7 @@ replaced and the UI gets an error instead of a dead server.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -21,7 +22,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from platformdirs import user_data_path
 from starlette.concurrency import run_in_threadpool
@@ -94,6 +95,16 @@ class Worker:
 
 worker = Worker()
 app = FastAPI(title="ScriptCAD")
+
+
+@app.middleware("http")
+async def revalidate_static(request: Request, call_next):
+    # Without this, browsers cache the UI modules heuristically and keep running old
+    # code after an upgrade (a stale module breaks every import that depends on it).
+    response = await call_next(request)
+    if not request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 @app.get("/api/info")
@@ -205,6 +216,52 @@ def step_status():
 async def http_error(_request, exc: HTTPException):
     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
 
+
+try:  # the FEA endpoints need the optional `sim` extra (NumPy/SciPy)
+    from .fea.web import router as fea_router
+    from .fea import analyze as fea_analyze
+    app.include_router(fea_router)
+except ImportError:
+    fea_analyze = None
+
+
+@app.get("/api/analyze/materials")
+def analyze_materials():
+    if fea_analyze is None:
+        return {"available": False, "materials": {}}
+    return {"available": True, "materials": {k: v[0] for k, v in fea_analyze.MATERIALS.items()}}
+
+
+@app.post("/api/analyze")
+def analyze(payload: dict = Body(...)):
+    """Build the voxel problem for one body; the browser solves it on its GPU."""
+    if fea_analyze is None:
+        raise HTTPException(501, 'analysis needs the simulation extra: pip install "scriptcad[sim]"')
+    setup = payload.get("setup", {})
+    groups = {"fixed": setup.get("fixed", []), "load": (setup.get("load") or {}).get("faces", [])}
+    geom = worker.run("analysis_geometry", payload.get("doc", {}), setup.get("body"), groups)
+    try:
+        cid, blob, meta = fea_analyze.build(geom, setup)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return Response(blob, media_type="application/octet-stream",
+                    headers={"X-Case-Id": cid, "X-Meta": json.dumps(meta)})
+
+
+@app.post("/api/analyze/result")
+async def analyze_result(request: Request, id: str):
+    if fea_analyze is None:
+        raise HTTPException(501, "analysis is not available")
+    import numpy as np
+    u = np.frombuffer(await request.body(), dtype="<f4")
+    try:
+        res = await run_in_threadpool(fea_analyze.result, id, u)
+        return Response(fea_analyze.result_blob(res), media_type="application/octet-stream",
+                        headers={"X-Stats": json.dumps(res["stats"])})
+    except KeyError as e:
+        raise HTTPException(410, str(e.args[0]))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 app.mount("/", StaticFiles(directory=WEB, html=True), name="web")
 

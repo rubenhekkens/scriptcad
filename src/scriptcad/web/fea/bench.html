@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Voxel FEA Bench</title>
+  <style>
+    :root { --bg: #0d1117; --panel: #161c25; --line: #273140; --text: #d7dee8; --muted: #8592a4; --ok: #57c27a; --bad: #f0645a; --accent: #76b900; color-scheme: dark; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, "Segoe UI", sans-serif; padding: 20px; }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    .muted { color: var(--muted); }
+    button { background: var(--accent); color: #0b1400; border: 0; border-radius: 6px; padding: 6px 14px; font-weight: 600; cursor: pointer; }
+    button:disabled { opacity: .4; }
+    table { border-collapse: collapse; margin-top: 14px; width: 100%; font-variant-numeric: tabular-nums; }
+    th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; font-size: 12px; }
+    td.num { text-align: right; font-family: ui-monospace, Consolas, monospace; }
+    .err-ok { color: var(--ok); } .err-bad { color: var(--bad); }
+    #log { white-space: pre-wrap; font: 12px ui-monospace, Consolas, monospace; color: var(--muted); margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Voxel FEA in WebGPU</h1>
+  <div class="muted" id="gpu">Checking WebGPU…</div>
+  <p><button id="run">Run benchmarks</button> <button id="runmg">Run multigrid (MG-PCG)</button></p>
+  <table><thead><tr><th>Case</th><th>h</th><th>Elem</th><th>Free DOF</th><th>Iter</th><th>ms/iter</th><th>Solve s</th><th>Error vs f64</th><th>Quantity</th><th>FEA</th><th>Reference</th><th>Error</th></tr></thead><tbody id="rows"></tbody></table>
+  <div id="log"></div>
+  <script type="module">
+    import { VoxelSolver, gpuInfo } from './solver.js';
+    const $ = s => document.querySelector(s);
+    const log = m => { $('#log').textContent += m + '\n'; };
+    const info = await gpuInfo();
+    $('#gpu').textContent = info ? `Adapter: ${info.vendor} ${info.architecture} ${info.description || ''}` : 'WebGPU unavailable';
+
+    const DEFAULT = [
+      ['cantilever', 1.0, 'hex8i'], ['thin_cantilever', 1.0, 'hex8'], ['thin_cantilever', 1.0, 'hex8i'],
+      ['thin_cantilever', 0.5, 'hex8'], ['thin_cantilever', 0.5, 'hex8i'],
+      ['tube_torsion', 0.5, 'hex8i'], ['lame_ring', 0.5, 'hex8i'],
+    ];
+    let solver = null;
+
+    async function runOne(name, h, form, opts = {}) {
+      solver ??= await VoxelSolver.create();
+      const resp = await fetch(`/api/fea/case?name=${name}&h=${h}&form=${form}`);
+      if (!resp.ok) throw new Error((await resp.json()).detail);
+      const id = resp.headers.get('X-Case-Id');
+      const blob = await resp.arrayBuffer();
+      const { method, ...rest } = opts;
+      const res = method === 'mg' ? await solver.solveMG(blob, { tol: 1e-6, ...rest }) : await solver.solve(blob, { tol: 1e-6, ...rest });
+      const meta = { iterations: res.iterations, rel_residual: res.rel, solve_ms: res.solveMs, setup_ms: res.setupMs,
+                     ms_per_iteration: res.msPerIteration, adapter: info, history: res.history };
+      if (method === 'mg') Object.assign(meta, { method: 'mg', levels: res.levels, stop: res.stop, settings: res.settings });
+      const r = await fetch(`/api/fea/result?id=${id}`, { method: 'POST', body: res.u, headers: { 'X-Meta': JSON.stringify(meta) } });
+      const scored = await r.json();
+      if (!r.ok) throw new Error(scored.detail);
+      return scored;
+    }
+
+    function addRows(s) {
+      const q = Object.entries(s.measures);
+      q.forEach(([k, m], i) => {
+        const tr = document.createElement('tr');
+        const e = m.error_pct;
+        tr.innerHTML = (i === 0 ? `<td rowspan="${q.length}">${s.name}</td><td rowspan="${q.length}" class="num">${s.h}</td><td rowspan="${q.length}">${s.form}</td>
+          <td rowspan="${q.length}" class="num">${s.free_dofs.toLocaleString()}</td><td rowspan="${q.length}" class="num">${s.iterations}</td>
+          <td rowspan="${q.length}" class="num">${s.ms_per_iteration.toFixed(2)}</td><td rowspan="${q.length}" class="num">${(s.solve_ms / 1000).toFixed(2)}</td>
+          <td rowspan="${q.length}" class="num">${s.error_vs_float64.toExponential(1)}</td>` : '') +
+          `<td>${k}</td><td class="num">${m.fea.toPrecision(5)} ${m.unit}</td><td class="num">${m.reference == null ? '—' : m.reference.toPrecision(5)}</td>
+           <td class="num ${e == null ? '' : Math.abs(e) < 3 ? 'err-ok' : 'err-bad'}">${e == null ? '—' : (e >= 0 ? '+' : '') + e.toFixed(2) + '%'}</td>`;
+        $('#rows').append(tr);
+      });
+    }
+
+    window.runBench = async (list = DEFAULT, opts) => {
+      const out = [];
+      for (const [name, h, form] of list) {
+        log(`${name} h=${h} ${form}…`);
+        try { const s = await runOne(name, h, form, opts); out.push(s); addRows(s); }
+        catch (e) { log(`  failed: ${e.message}`); out.push({ name, h, form, error: e.message }); }
+      }
+      return out;
+    };
+    const MG_LIST = [...DEFAULT, ['thin_cantilever', 0.25, 'hex8i']];
+    window.runBenchMG = (list = MG_LIST, opts = {}) => window.runBench(list, { method: 'mg', ...opts });
+    $('#runmg').onclick = async () => { $('#runmg').disabled = true; await window.runBenchMG(); $('#runmg').disabled = false; };
+    $('#run').onclick = async () => { $('#run').disabled = true; await window.runBench(); $('#run').disabled = false; };
+  </script>
+</body>
+</html>

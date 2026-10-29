@@ -1,0 +1,33 @@
+{
+  "name": "Three bridges",
+  "features": [
+    {"id": "slab", "type": "box", "name": "A · Solid slab", "params": {"x": 0, "y": 0, "z": 0, "l": 200, "w": 20, "h": 16}},
+
+    {"id": "girder", "type": "extrude", "name": "B · I-girder", "params": {"plane": "YZ", "profile": "polyline",
+      "points": "40,0; 60,0; 60,3; 51.5,3; 51.5,37; 60,37; 60,40; 40,40; 40,37; 48.5,37; 48.5,3; 40,3",
+      "dist": 200, "offset": 0, "cx": 0, "cy": 0}},
+
+    {"id": "truss", "type": "extrude", "name": "C · Truss", "params": {"plane": "XZ", "profile": "rect",
+      "cx": 100, "cy": 20, "w": 200, "h": 40, "dist": 12, "offset": -92}},
+    {"id": "up", "type": "extrude", "name": "Truss windows ▲", "params": {"plane": "XZ", "profile": "polyline",
+      "points": "3.399,4; 36.601,4; 20,33.882", "dist": 14, "offset": -93, "cx": 0, "cy": 0}},
+    {"id": "upx", "type": "pattern", "name": "Repeat ▲ windows", "params": {"target": "up", "mode": "linear", "count": 5, "dx": 40, "dy": 0, "dz": 0}},
+    {"id": "cut1", "type": "boolean", "name": "Cut ▲ windows", "params": {"op": "difference", "target": "truss", "tool": "up", "keep_tool": false}},
+    {"id": "down", "type": "extrude", "name": "Truss windows ▼", "params": {"plane": "XZ", "profile": "polyline",
+      "points": "23.399,36; 56.601,36; 40,6.118", "dist": 14, "offset": -93, "cx": 0, "cy": 0}},
+    {"id": "downx", "type": "pattern", "name": "Repeat ▼ windows", "params": {"target": "down", "mode": "linear", "count": 4, "dx": 40, "dy": 0, "dz": 0}},
+    {"id": "cut2", "type": "boolean", "name": "Cut ▼ windows", "params": {"op": "difference", "target": "truss", "tool": "down", "keep_tool": false}}
+  ],
+  "analysis": {
+    "body": "slab",
+    "material": "steel",
+    "quality": "normal",
+    "live": true,
+    "load": {"type": "force", "vector": [0, 0, -2000], "pressure": 1, "torque": 10, "axis": "Z"},
+    "bodies": {
+      "slab":   {"fixed": [[0, 10, 8], [200, 10, 8]],   "loads": [[100, 10, 16]]},
+      "girder": {"fixed": [[0, 50, 20], [200, 50, 20]], "loads": [[100, 50, 40]]},
+      "truss":  {"fixed": [[0, 86, 20], [200, 86, 20]], "loads": [[100, 86, 40]]}
+    }
+  }
+}
