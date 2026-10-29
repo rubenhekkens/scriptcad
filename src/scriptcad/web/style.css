@@ -241,6 +241,8 @@ body.script-mode #propPanel { display: none; }
 .legend { margin: 14px 0 8px; }
 .legend .bar { height: 10px; border-radius: 3px; }
 .legend .ticks { display: flex; justify-content: space-between; font: 11px var(--mono); color: var(--muted); margin-top: 3px; }
+.legend.waste { display: flex; gap: 16px; font-size: 12px; color: var(--muted); }
+.legend.waste i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -2px; }
 #props dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 10px 0 8px; font-size: 12.5px; }
 #props dt { color: var(--muted); }
 #props dd { margin: 0; text-align: right; font-family: var(--mono); font-size: 12px; }
@@ -257,4 +259,5 @@ table.compare tr { cursor: pointer; }
 table.compare tr.on td:first-child { box-shadow: inset 2px 0 0 var(--accent); padding-left: 6px; }
 table.compare td.best { color: var(--accent); font-weight: 650; }
 table.compare td { padding: 4px 3px; }
+table.compare td:first-child { white-space: normal; }
 table.compare small { color: var(--muted); font-size: 10px; }

@@ -50,6 +50,10 @@ def test_force_is_reacted_by_the_supports():
     assert 0 < s["p50"] < s["p99"] < s["max"]
     assert s["max_away"] <= s["max"]
     assert 0 < s["max_displacement"] < 0.1                                # mm
+    # voxel percentiles (volume fractions) for the underused-material view
+    q = s["vm_pct"]
+    assert len(q) == 101 and all(a <= b for a, b in zip(q, q[1:]))
+    assert q[99] == pytest.approx(s["p99"], rel=1e-3) and q[100] == pytest.approx(s["max"], rel=1e-3)
 
 
 def test_result_is_shown_on_a_refined_copy_of_the_viewer_mesh():

@@ -478,9 +478,10 @@ export class Viewer {
 
   /**
    * Colour a body by a per-corner scalar (same order as its positions) and keep the
-   * per-corner displacement for the deformed view. cap: value mapped to the top colour.
+   * per-corner displacement for the deformed view. cap: value mapped to the top colour;
+   * color: maps value / cap to [r, g, b] (default: the stress ramp).
    */
-  setField(id, values, cap, displacement = null, mesh = null) {
+  setField(id, values, cap, displacement = null, mesh = null, color = fieldColor) {
     const b = this.bodies.get(id);
     if (!b) return false;
     if (mesh) {
@@ -488,7 +489,8 @@ export class Viewer {
       // two triangles, far too coarse to show a stress field); keep the CAD mesh to restore
       b.cadGeometry ??= b.mesh.geometry;
       const fine = new THREE.BufferGeometry();
-      fine.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
+      // a copy: the deformed view writes into this array, and the result must stay undeformed
+      fine.setAttribute('position', new THREE.BufferAttribute(mesh.positions.slice(), 3));
       fine.setAttribute('normal', new THREE.BufferAttribute(mesh.normals, 3));
       fine.computeBoundingSphere();
       fine.computeBoundingBox();
@@ -500,7 +502,7 @@ export class Viewer {
     const g = b.mesh.geometry;
     const n = values.length;
     const col = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) col.set(fieldColor(values[i] / cap), 3 * i);
+    for (let i = 0; i < n; i++) col.set(color(values[i] / cap), 3 * i);
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
     b.mesh.material.vertexColors = true;
     b.mesh.material.color.set(0xffffff);

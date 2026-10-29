@@ -236,6 +236,9 @@ def result(cid, u_f32):
         "max_away": float(vs[far].max()) if far.any() else None,
         "max_away_at": centres[i_far].round(2).tolist(),
         "max_displacement": float(dmag.max()),
+        # every voxel has the same volume, so these percentiles give the volume fraction
+        # below any stress (the viewer's underused-material view)
+        "vm_pct": np.percentile(vs, np.arange(101)).round(4).tolist(),
     }
     return {"stats": stats, "positions": pos, "normals": nrm, "triFace": tri_face,
             "vonMises": vm_pos, "displacement": disp}

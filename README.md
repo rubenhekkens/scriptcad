@@ -149,6 +149,15 @@ higher than bending theory alone (3.9 µm) because the thin web also shears, whi
 sharp joints concentrate stress (55.6 MPa peak away from the supports, against the slab's
 35.7 MPa), which is why real trusses use gusset plates.
 
+**Show → Underused material** makes the reason visible. It shades the material that
+carries less than a fifth of the design's own 99th-percentile stress, and the *Idle* column
+gives that share of the volume: **40%** of the slab (about 200 g of steel), 24% of the truss,
+13% of the girder. Seen from the front, the slab's idle material is a band along the middle
+of its height, splitting toward the quarter points where the bending moment changes sign.
+That band is exactly the material the girder leaves out.
+
+![Underused material, front view: the slab's idle band along its middle](docs/bridges-underused.jpg)
+
 How to read it:
 
 - **The colour scale stops at the 99th percentile** by default. Next to supports and
