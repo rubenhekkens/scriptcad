@@ -206,6 +206,12 @@ async def http_error(_request, exc: HTTPException):
     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
 
 
+try:  # the FEA endpoints need the optional `sim` extra (NumPy/SciPy)
+    from .fea.web import router as fea_router
+    app.include_router(fea_router)
+except ImportError:
+    pass
+
 app.mount("/", StaticFiles(directory=WEB, html=True), name="web")
 
 

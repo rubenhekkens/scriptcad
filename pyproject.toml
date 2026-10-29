@@ -24,6 +24,9 @@ classifiers = [
 [project.optional-dependencies]
 # OpenCASCADE, for STEP import/export (LGPL-2.1, used unmodified as a separate wheel)
 step = ["cadquery-ocp>=7.8,<9"]
+# Voxel FEA: NumPy/SciPy for the float64 CPU reference, PyAMG as its solver,
+# NVIDIA Warp for the native CUDA solver. The browser solver (WebGPU) needs none of these.
+sim = ["numpy>=2", "scipy>=1.13", "pyamg>=5.2", "warp-lang>=1.8"]
 
 [project.scripts]
 scriptcad = "scriptcad.server:main"
