@@ -15,6 +15,18 @@ const COL = {
   cap: 0xd2563a,
 };
 
+// perceptual blue -> teal -> yellow -> red ramp for result fields (t in 0..1, clipped)
+const RAMP = [[0, [0.17, 0.27, 0.6]], [0.35, [0.1, 0.62, 0.66]], [0.65, [0.96, 0.82, 0.25]],
+              [0.85, [0.95, 0.45, 0.15]], [1, [0.8, 0.08, 0.12]]];
+export function fieldColor(t) {
+  t = Math.min(Math.max(t, 0), 1);
+  for (let i = 1; i < RAMP.length; i++) if (t <= RAMP[i][0]) {
+    const [a, ca] = RAMP[i - 1], [b, cb] = RAMP[i], f = (t - a) / (b - a);
+    return ca.map((v, k) => v + (cb[k] - v) * f);
+  }
+  return RAMP[RAMP.length - 1][1];
+}
+
 export class Viewer {
   constructor(host, gizmoCanvas) {
     this.host = host;
@@ -61,6 +73,7 @@ export class Viewer {
     this.hover = null;
     this.selection = [];
     this.measure = [];
+    this.marks = [];          // [{ bodyId, index, color }] face overlays (analysis supports/loads)
     this.onPick = () => {};
     this.onHover = () => {};
     this._lineMats = new Set();
@@ -320,7 +333,8 @@ export class Viewer {
     if (!hit) return null;
     const bodyId = hit.object.userData.bodyId;
     const b = this.bodies.get(bodyId);
-    if (this.mode === 'face') return { bodyId, kind: 'face', index: b.data.triFace[hit.faceIndex], point: hit.point.toArray() };
+    const triFace = b.displayTriFace ?? b.data.triFace;
+    if (this.mode === 'face') return { bodyId, kind: 'face', index: triFace[hit.faceIndex], point: hit.point.toArray() };
     if (this.mode === 'point') return { bodyId, kind: 'point', index: 0, point: hit.point.toArray(), normal: hit.face?.normal?.toArray() };
     if (this.mode === 'edge') return null;
     return { bodyId, kind: 'body', index: 0, point: hit.point.toArray() };
@@ -387,15 +401,19 @@ export class Viewer {
         const g = new THREE.BufferGeometry();
         g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
         const m = new THREE.MeshBasicMaterial({
-          color, transparent: true, opacity: isHover ? 0.35 : 0.55, depthWrite: false,
+          color, transparent: true, opacity: s.opacity ?? (isHover ? 0.35 : 0.55), depthWrite: false,
           polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, clippingPlanes: [this.clip],
           side: THREE.DoubleSide,
         });
         this.overlay.add(new THREE.Mesh(g, m));
+        if (s.outline) this._faceOutline(b, tris, color);
       } else if (s.kind === 'edge') {
         this._edgeOverlay(b, s.index, color, isHover ? 3 : 4);
       }
     };
+    // marks (analysis supports and loads) get a solid fill and a thick outline, so they
+    // stay readable on top of a coloured result field
+    for (const m of this.marks) draw({ bodyId: m.bodyId, kind: 'face', index: m.index, opacity: m.opacity ?? 0.8, outline: true }, m.color, false);
     for (const s of this.selection) draw(s, COL.select, false);
     if (this.hover && this.hover.kind !== 'point') {
       const dup = this.selection.some(s => s.bodyId === this.hover.bodyId && s.kind === this.hover.kind && s.index === this.hover.index);
@@ -418,6 +436,117 @@ export class Viewer {
     const l = new LineSegments2(g, m);
     l.renderOrder = 5;
     this.overlay.add(l);
+  }
+
+  /** Thick outline of a face: the edges of its triangles that no other of its triangles shares. */
+  _faceOutline(b, tris, color) {
+    const P = b.data.positions;
+    const key = (o) => `${P[o].toFixed(4)},${P[o + 1].toFixed(4)},${P[o + 2].toFixed(4)}`;
+    const count = new Map();
+    const segs = [];
+    for (const t of tris) {
+      for (let e = 0; e < 3; e++) {
+        const oa = t * 9 + 3 * e, ob = t * 9 + 3 * ((e + 1) % 3);
+        const ka = key(oa), kb = key(ob);
+        const k = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+        count.set(k, (count.get(k) || 0) + 1);
+        segs.push([k, oa, ob]);
+      }
+    }
+    const pts = [];
+    for (const [k, oa, ob] of segs) {
+      if (count.get(k) !== 1) continue;
+      pts.push(P[oa], P[oa + 1], P[oa + 2], P[ob], P[ob + 1], P[ob + 2]);
+    }
+    if (!pts.length) return;
+    const g = new LineSegmentsGeometry();
+    g.setPositions(pts);
+    const m = new LineMaterial({ color, linewidth: 3.5, clippingPlanes: [this.clip] });
+    m.resolution.set(this.host.clientWidth, this.host.clientHeight);
+    this._lineMats.add(m);
+    const l = new LineSegments2(g, m);
+    l.renderOrder = 6;
+    this.overlay.add(l);
+  }
+
+  setMarks(marks) {
+    this.marks = marks;
+    this._refreshHighlights();
+  }
+
+  // ---- result fields (analysis) -------------------------------------------------
+
+  /**
+   * Colour a body by a per-corner scalar (same order as its positions) and keep the
+   * per-corner displacement for the deformed view. cap: value mapped to the top colour.
+   */
+  setField(id, values, cap, displacement = null, mesh = null) {
+    const b = this.bodies.get(id);
+    if (!b) return false;
+    if (mesh) {
+      // a result comes on its own, finer copy of the body's mesh (a flat CAD face is only
+      // two triangles, far too coarse to show a stress field); keep the CAD mesh to restore
+      b.cadGeometry ??= b.mesh.geometry;
+      const fine = new THREE.BufferGeometry();
+      fine.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
+      fine.setAttribute('normal', new THREE.BufferAttribute(mesh.normals, 3));
+      fine.computeBoundingSphere();
+      fine.computeBoundingBox();
+      if (b.mesh.geometry !== b.cadGeometry) b.mesh.geometry.dispose();
+      b.mesh.geometry = fine;
+      b.displayTriFace = mesh.triFace;
+      b.basePositions = null;
+    }
+    const g = b.mesh.geometry;
+    const n = values.length;
+    const col = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) col.set(fieldColor(values[i] / cap), 3 * i);
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    b.mesh.material.vertexColors = true;
+    b.mesh.material.color.set(0xffffff);
+    b.mesh.material.needsUpdate = true;
+    b.basePositions ??= g.getAttribute('position').array.slice();
+    b.displacement = displacement;
+    this.setDeformation(this.deformScale || 0);
+    return true;
+  }
+
+  /** Show displacements scaled by `scale` on every body that has a field (0 = undeformed). */
+  setDeformation(scale) {
+    this.deformScale = scale;
+    for (const b of this.bodies.values()) {
+      if (!b.basePositions) continue;
+      const pos = b.mesh.geometry.getAttribute('position');
+      const base = b.basePositions, d = b.displacement;
+      for (let i = 0; i < base.length; i++) pos.array[i] = base[i] + (d && scale ? scale * d[i] : 0);
+      pos.needsUpdate = true;
+      b.mesh.geometry.computeBoundingSphere();
+      b.edges.visible = !scale && (this.display.edges || this.display.wire);
+    }
+  }
+
+  clearField() {
+    for (const b of this.bodies.values()) {
+      if (b.cadGeometry) {
+        b.mesh.geometry.dispose();
+        b.mesh.geometry = b.cadGeometry;
+        b.cadGeometry = null;
+        b.displayTriFace = null;
+      } else if (b.basePositions) {
+        const g = b.mesh.geometry;
+        g.getAttribute('position').array.set(b.basePositions);
+        g.getAttribute('position').needsUpdate = true;
+        g.deleteAttribute('color');
+        g.computeBoundingSphere();
+      }
+      if (!b.basePositions) continue;
+      b.mesh.material.vertexColors = false;
+      b.mesh.material.color.copy(b.color);
+      b.mesh.material.needsUpdate = true;
+      b.basePositions = null;
+      b.displacement = null;
+    }
+    this._applyDisplay();
   }
 
   setMeasure(points) {

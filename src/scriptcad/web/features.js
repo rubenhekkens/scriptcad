@@ -146,6 +146,7 @@ export const ICONS = {
   import: '<path d="M12 3v12m0 0-4-4m4 4 4-4"/><path d="M4 17v3h16v-3"/>',
   boolean: '<circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/>',
   measure: '<path d="m3 17 14-14 4 4L7 21z"/><path d="m7 13 2 2m1-5 2 2m1-5 2 2"/>',
+  analyze: '<path d="M4 20h16"/><path d="M6 20V9l6-5 6 5v11" opacity=".45"/><path d="M3 7c3 0 4 4 6 4s3-6 6-6 3 4 6 4" stroke-width="2"/>',
   section: '<path d="M12 3 4 7v10l8 4 8-4V7z" opacity=".45"/><path d="M2 13h20" stroke-width="2"/>',
 };
 

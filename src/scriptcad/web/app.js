@@ -1,5 +1,6 @@
 import { Viewer } from './viewer.js';
 import { FEATURES, CREATES, defaults, visibleFields, liveBodiesBefore, nextName, icon, featureIcon } from './features.js';
+import { createAnalyze } from './analyze.js';
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -56,6 +57,18 @@ const S = {
 const viewer = new Viewer($('#viewport'), $('#gizmo'));
 window.scriptcad = { S, viewer };  // handy from the devtools console
 
+// Analyze mode lives in analyze.js; these are the only hooks it needs from the app
+const analysis = createAnalyze({
+  S, viewer,
+  toast: (m, e) => toast(m, e),
+  bodies: () => S.bodies.model,
+  bodyLabel: id => bodyLabel(id),
+  refOf: hit => refOf(hit),
+  onChange: () => { persist(); renderRibbonState(); renderProps(); },
+});
+window.scriptcad.analysis = analysis;
+analysis.bind($('#props'));
+
 // ---------------------------------------------------------------------------
 // kernel calls
 // ---------------------------------------------------------------------------
@@ -99,7 +112,7 @@ async function regen() {
     S.status = S.pick ? { ...S.status, ...res.status } : res.status;
     S.bodies.model = res.bodies;
     assignColors(res.bodies);
-    if (S.mode === 'model') showBodies(res.bodies);
+    if (S.mode === 'model') { showBodies(res.bodies); analysis.afterRegen(); }
     const errs = Object.values(res.status).filter(s => s.state === 'error').length;
     setKernel(errs ? 'warn' : 'ok', `${S.pick ? 'Rolled back for picking · ' : ''}Regenerated ${doc.features.length} feature${doc.features.length === 1 ? '' : 's'} in ${Math.round(performance.now() - t0)} ms${errs ? ` · ${errs} error${errs > 1 ? 's' : ''}` : ''}`);
     renderTree();
@@ -340,6 +353,7 @@ function onPickRef(hit) {
 
 viewer.onPick = (hit, e) => {
   if (S.measuring) return onMeasure(hit);
+  if (analysis.picking() && !S.editing) return analysis.onPick(hit);
   if (S.pick && S.editing) return onPickRef(hit);
   if (!hit) { S.selection = []; }
   else {
@@ -459,6 +473,7 @@ const RIBBON = [
   ['Modify', [['fillet', 'Fillet', 'fillet', { kind: 'fillet' }], ['chamfer', 'Chamfer', 'fillet', { kind: 'chamfer' }], ['shell', 'Shell'], ['offset', 'Offset']]],
   ['Transform', [['move', 'Move'], ['copy', 'Copy'], ['pattern', 'Pattern']]],
   ['Inspect', [['measure', 'Measure', '@measure'], ['section', 'Section', '@section']]],
+  ['Simulate', [['analyze', 'Analyze', '@analyze']]],
 ];
 
 function renderRibbon() {
@@ -472,6 +487,7 @@ function renderRibbonState() {
   $$('.rbtn').forEach(b => {
     if (b.dataset.type === '@measure') b.classList.toggle('on', S.measuring);
     if (b.dataset.type === '@section') b.classList.toggle('on', viewer.section.on);
+    if (b.dataset.type === '@analyze') b.classList.toggle('on', analysis.isOn());
   });
 }
 
@@ -481,6 +497,7 @@ $('#ribbon').addEventListener('click', e => {
   const t = b.dataset.type;
   if (t === '@measure') return toggleMeasure();
   if (t === '@section') return toggleSection();
+  if (t === '@analyze') { if (S.measuring) toggleMeasure(false); return analysis.toggle(); }
   if (S.measuring) toggleMeasure(false);
   const preset = b.dataset.preset ? JSON.parse(b.dataset.preset) : {};
   const needsBodies = FEATURES[t].fields.filter(f => f.type === 'body').length;
@@ -571,6 +588,11 @@ function bodyLabel(id) {
 function renderProps() {
   const host = $('#props');
   const f = S.editing && feature(S.editing.id);
+  if (!f && analysis.isOn()) {
+    $('#propTitle').textContent = 'Analyze';
+    analysis.render();
+    return;
+  }
   if (!f) {
     $('#propTitle').textContent = 'Properties';
     host.innerHTML = `<div class="empty-p">Add a feature from the toolbar, or click one in the history to edit it.<br><br>
@@ -830,6 +852,7 @@ function setMode(mode) {
   if (mode === S.mode) return;
   if (S.editing) finishEdit();
   if (S.measuring) toggleMeasure(false);
+  if (analysis.isOn()) analysis.toggle(false);
   S.mode = mode;
   document.body.classList.toggle('script-mode', mode === 'script');
   $$('.modes button').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
@@ -888,6 +911,7 @@ function loadProject(data) {
   S.undo.push(before);
   S.selection = [];
   firstFit = true;
+  analysis.reset();
   afterDocSwap();
 }
 
@@ -926,10 +950,12 @@ $('#fileUsd').addEventListener('change', async e => {
   } catch (err) { setKernel('bad', err.message); toast(err.message, true); }
 });
 
-async function loadExample() {
-  const data = await (await fetch('example.json')).json();
+async function loadExample(file = 'example.json', { analyze = false } = {}) {
+  const data = await (await fetch(file)).json();
   if (S.mode !== 'model') setMode('model');
   loadProject({ doc: data });
+  // simulation examples open straight into Analyze, which runs every prepared body
+  if (analyze && !analysis.isOn()) analysis.toggle(true);
 }
 
 function newPart() {
@@ -939,7 +965,8 @@ function newPart() {
 }
 
 const ACTIONS = {
-  new: newPart, example: loadExample, save: saveProject,
+  new: newPart, example: () => loadExample(), save: saveProject,
+  'example-bridges': () => loadExample('examples/bridges.json', { analyze: true }),
   open: () => $('#fileOpen').click(), import: () => $('#fileUsd').click(),
   'exp-usd-brep': () => exportAs('usd-brep'), 'exp-usdc': () => exportAs('usdc'),
   'exp-usd-mesh': () => exportAs('usd-mesh'), 'exp-stl': () => exportAs('stl'),
@@ -975,6 +1002,7 @@ document.addEventListener('keydown', e => {
   if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); return redo(); }
   if (e.key === 'Escape') {
     if (S.measuring) return toggleMeasure(false);
+    if (analysis.picking()) return analysis.stopPick();
     if (S.pick) return stopPick();
     if (S.editing) return S.editing.isNew ? deleteFeature(S.editing.id) : cancelEdit();
     S.selection = []; syncSelectionToViewer(); renderInfo(); renderBodies();
