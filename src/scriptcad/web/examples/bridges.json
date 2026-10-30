@@ -1,10 +1,16 @@
 {
   "name": "Three bridges",
+  "variables": [
+    {"name": "bf", "value": 20},
+    {"name": "tf", "value": 3},
+    {"name": "tw", "value": 3},
+    {"name": "H", "value": 40}
+  ],
   "features": [
     {"id": "slab", "type": "box", "name": "A · Solid slab", "params": {"x": 0, "y": 0, "z": 0, "l": 200, "w": 20, "h": 16}},
 
     {"id": "girder", "type": "extrude", "name": "B · I-girder", "params": {"plane": "YZ", "profile": "polyline",
-      "points": "40,0; 60,0; 60,3; 51.5,3; 51.5,37; 60,37; 60,40; 40,40; 40,37; 48.5,37; 48.5,3; 40,3",
+      "points": "50-bf/2, 0; 50+bf/2, 0; 50+bf/2, tf; 50+tw/2, tf; 50+tw/2, H-tf; 50+bf/2, H-tf; 50+bf/2, H; 50-bf/2, H; 50-bf/2, H-tf; 50-tw/2, H-tf; 50-tw/2, tf; 50-bf/2, tf",
       "dist": 200, "offset": 0, "cx": 0, "cy": 0}},
 
     {"id": "truss", "type": "extrude", "name": "C · Truss", "params": {"plane": "XZ", "profile": "rect",

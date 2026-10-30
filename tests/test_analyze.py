@@ -75,6 +75,13 @@ def test_result_is_shown_on_a_refined_copy_of_the_viewer_mesh():
     assert dmax == pytest.approx(res["stats"]["max_displacement"], rel=0.05)
 
 
+def test_stats_only_result_matches_the_full_one():
+    _, _, u, meta, full = _run({"type": "force", "vector": [0, 0, -2000]})
+    cid = next(reversed(analyze._cases))
+    only = analyze.result(cid, u.astype(np.float32), field=False)
+    assert set(only) == {"stats"} and only["stats"] == full["stats"]
+
+
 def test_result_blob_layout():
     *_, res = _run({"type": "force", "vector": [0, 0, -2000]})
     blob = analyze.result_blob(res)

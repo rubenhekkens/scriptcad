@@ -249,14 +249,15 @@ def analyze(payload: dict = Body(...)):
 
 
 @app.post("/api/analyze/result")
-async def analyze_result(request: Request, id: str):
+async def analyze_result(request: Request, id: str, field: bool = True):
+    """Stresses for a solved case; field=false sends the statistics only (no display mesh)."""
     if fea_analyze is None:
         raise HTTPException(501, "analysis is not available")
     import numpy as np
     u = np.frombuffer(await request.body(), dtype="<f4")
     try:
-        res = await run_in_threadpool(fea_analyze.result, id, u)
-        return Response(fea_analyze.result_blob(res), media_type="application/octet-stream",
+        res = await run_in_threadpool(fea_analyze.result, id, u, field)
+        return Response(fea_analyze.result_blob(res) if field else b"", media_type="application/octet-stream",
                         headers={"X-Stats": json.dumps(res["stats"])})
     except KeyError as e:
         raise HTTPException(410, str(e.args[0]))

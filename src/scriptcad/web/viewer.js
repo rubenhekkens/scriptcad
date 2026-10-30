@@ -94,6 +94,7 @@ export class Viewer {
   // ---- scene content ------------------------------------------------------
 
   setBodies(list, { colors = {}, hidden = new Set(), refit = false } = {}) {
+    this.setVoxelPreview(null);
     for (const b of this.bodies.values()) this._disposeBody(b);
     this.bodies.clear();
     for (const data of list) {
@@ -169,14 +170,15 @@ export class Viewer {
     const { edges, wire, xray } = this.display;
     for (const b of this.bodies.values()) {
       const m = b.mesh.material;
+      const ghost = this.voxel?.userData.bodyId === b.data.id;     // a voxel design is shown in its place
       b.mesh.visible = !wire;
-      m.transparent = xray;
-      m.opacity = xray ? 0.28 : 1;
-      m.depthWrite = !xray;
+      m.transparent = xray || ghost;
+      m.opacity = ghost ? 0.1 : xray ? 0.28 : 1;
+      m.depthWrite = !xray && !ghost;
       m.needsUpdate = true;
       b.edges.visible = edges || wire;
       b.edges.material.color.set(wire || xray ? 0x9fb4cc : COL.edge);
-      b.cap.visible = this.section.on && !wire && !xray;
+      b.cap.visible = this.section.on && !wire && !xray && !ghost;
     }
   }
 
@@ -525,6 +527,32 @@ export class Viewer {
       b.mesh.geometry.computeBoundingSphere();
       b.edges.visible = !scale && (this.display.edges || this.display.wire);
     }
+  }
+
+  /**
+   * Show a voxel design (mesh: positions, normals, colours, optional index) in place of body `id`,
+   * which stays as a faint ghost for comparison. null removes it.
+   */
+  setVoxelPreview(id, mesh = null) {
+    if (this.voxel) {
+      this.root.remove(this.voxel);
+      this.voxel.geometry.dispose();
+      this.voxel.material.dispose();
+      this.voxel = null;
+    }
+    if (mesh && this.bodies.has(id)) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
+      g.setAttribute('normal', new THREE.BufferAttribute(mesh.normals, 3));
+      g.setAttribute('color', new THREE.BufferAttribute(mesh.colors, 3));
+      if (mesh.index) g.setIndex(new THREE.BufferAttribute(mesh.index, 1));
+      g.computeBoundingSphere();
+      this.voxel = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
+        vertexColors: true, metalness: 0.08, roughness: 0.6, side: THREE.DoubleSide, clippingPlanes: [this.clip] }));   // both sides: a section shows the cut walls
+      this.voxel.userData.bodyId = id;
+      this.root.add(this.voxel);
+    }
+    this._applyDisplay();
   }
 
   clearField() {

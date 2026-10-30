@@ -185,8 +185,12 @@ def display_mesh(corners, normals, tri_face, target):
     return pos, nrm, F
 
 
-def result(cid, u_f32):
-    """Von Mises and displacement on a refined copy of the viewer mesh, plus statistics."""
+def result(cid, u_f32, field=True):
+    """Von Mises and displacement on a refined copy of the viewer mesh, plus statistics.
+
+    field=False returns the statistics only (Explore solves many variants and plots
+    numbers), which skips the display mesh, by far the slower part.
+    """
     from scipy.spatial import cKDTree
     case = _cases.get(cid)
     if case is None:
@@ -198,23 +202,7 @@ def result(cid, u_f32):
     vm = p.von_mises(u)
     solid = np.flatnonzero(p.emod > 0)
     centres = p.voxel_centers()[solid]
-
-    pos, nrm, tri_face = display_mesh(case["corners"], case["normals"], case["tri_face"], 3.0 * p.h)
-    _, near_vox = cKDTree(centres).query(pos)
-    vox = solid[near_vox]
-    vm_pos = vm[vox]
-
-    # displacement: trilinear inside the point's (nearest solid) voxel
     nx, ny, nz = p.shape
-    ijk = np.stack([vox % nx, (vox // nx) % ny, vox // (nx * ny)], 1)
-    loc = np.clip((pos - p.origin) / p.h - ijk, 0.0, 1.0)
-    en = p.element_nodes()[vox]
-    disp = np.zeros_like(pos)
-    for a in range(8):
-        di, dj, dk = a & 1, (a >> 1) & 1, (a >> 2) & 1
-        w = ((loc[:, 0] if di else 1 - loc[:, 0]) * (loc[:, 1] if dj else 1 - loc[:, 1])
-             * (loc[:, 2] if dk else 1 - loc[:, 2]))
-        disp += w[:, None] * u.reshape(-1, 3)[en[:, a]]
 
     vs = vm[solid]
     # peaks next to supports and load points are singular (they grow without bound with
@@ -240,6 +228,25 @@ def result(cid, u_f32):
         # below any stress (the viewer's underused-material view)
         "vm_pct": np.percentile(vs, np.arange(101)).round(4).tolist(),
     }
+    if not field:
+        return {"stats": stats}
+
+    pos, nrm, tri_face = display_mesh(case["corners"], case["normals"], case["tri_face"], 3.0 * p.h)
+    _, near_vox = cKDTree(centres).query(pos)
+    vox = solid[near_vox]
+    vm_pos = vm[vox]
+
+    # displacement: trilinear inside the point's (nearest solid) voxel
+    ijk = np.stack([vox % nx, (vox // nx) % ny, vox // (nx * ny)], 1)
+    loc = np.clip((pos - p.origin) / p.h - ijk, 0.0, 1.0)
+    en = p.element_nodes()[vox]
+    disp = np.zeros_like(pos)
+    for a in range(8):
+        di, dj, dk = a & 1, (a >> 1) & 1, (a >> 2) & 1
+        w = ((loc[:, 0] if di else 1 - loc[:, 0]) * (loc[:, 1] if dj else 1 - loc[:, 1])
+             * (loc[:, 2] if dk else 1 - loc[:, 2]))
+        disp += w[:, None] * u.reshape(-1, 3)[en[:, a]]
+
     return {"stats": stats, "positions": pos, "normals": nrm, "triFace": tri_face,
             "vonMises": vm_pos, "displacement": disp}
 

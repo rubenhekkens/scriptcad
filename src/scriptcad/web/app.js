@@ -1,6 +1,7 @@
 import { Viewer } from './viewer.js';
 import { FEATURES, CREATES, defaults, visibleFields, liveBodiesBefore, nextName, icon, featureIcon } from './features.js';
 import { createAnalyze } from './analyze.js';
+import { evaluate, variablesLenient, NAME } from './expr.js';
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -65,6 +66,14 @@ const analysis = createAnalyze({
   bodyLabel: id => bodyLabel(id),
   refOf: hit => refOf(hit),
   onChange: () => { persist(); renderRibbonState(); renderProps(); },
+  // Explore: put a variant's values into the variables (one undo step) and rebuild
+  setVariables: values => {
+    const before = snap();
+    for (const v of S.doc.variables || []) if (v.name in values) v.value = values[v.name];
+    commit(before);
+    renderVars();
+    scheduleRegen(0);
+  },
 });
 window.scriptcad.analysis = analysis;
 analysis.bind($('#props'));
@@ -608,8 +617,11 @@ function renderProps() {
     const v = f.params[fd.k];
     const id = 'p_' + fd.k;
     switch (fd.type) {
-      case 'num':
-        return `<div class="field"><label for="${id}">${fd.label}</label><input id="${id}" data-k="${fd.k}" data-t="num" type="number" step="${fd.step || 'any'}" value="${v ?? ''}"></div>`;
+      case 'num': {
+        // a number, or an expression over the document's variables ("40 - tf")
+        const expr = typeof v === 'string';
+        return `<div class="field"><label for="${id}">${fd.label}</label><div class="num"><input id="${id}" data-k="${fd.k}" data-t="num" type="text" inputmode="decimal" spellcheck="false" autocomplete="off" class="${expr ? 'expr' : ''}" value="${esc(v ?? '')}"><span class="val">${expr ? exprValue(v) : ''}</span></div></div>`;
+      }
       case 'sel':
         return `<div class="field"><label for="${id}">${fd.label}</label><select id="${id}" data-k="${fd.k}">${fd.opts.map(([ov, ol]) => `<option value="${ov}" ${ov === v ? 'selected' : ''}>${ol}</option>`).join('')}</select></div>`;
       case 'bool':
@@ -657,10 +669,16 @@ $('#props').addEventListener('input', e => {
   const fd = FEATURES[f.type].fields.find(x => x.k === k);
   let v = e.target.value;
   if (e.target.dataset.t === 'num') {
-    if (v === '' || !isFinite(+v)) { e.target.classList.add('bad'); return; }
-    v = +v;
-    if (fd.min !== undefined && v < fd.min) { e.target.classList.add('bad'); return; }
+    const raw = v.trim();
+    const plain = raw !== '' && isFinite(+raw);
+    let val;
+    try { val = evaluate(plain ? +raw : raw, variablesLenient(S.doc)); } catch (err) { e.target.classList.add('bad'); e.target.title = err.message; return; }
+    if (fd.min !== undefined && val < fd.min) { e.target.classList.add('bad'); e.target.title = `at least ${fd.min}`; return; }
     e.target.classList.remove('bad');
+    e.target.title = '';
+    e.target.classList.toggle('expr', !plain);
+    e.target.nextElementSibling.textContent = plain ? '' : `= ${fmt(val, 4)}`;
+    v = plain ? +raw : raw;
   }
   if (e.target.dataset.t === 'bool') v = e.target.checked;
   const prevVisible = visibleFields(f.type, f.params).map(x => x.k).join();
@@ -759,8 +777,94 @@ function renderTopbar() {
   $('#btnRedo').disabled = !S.redo.length;
 }
 
+// ---------------------------------------------------------------------------
+// variables: named numbers that any number field can use in an expression
+// ---------------------------------------------------------------------------
+
+function exprValue(text) {
+  try { return `= ${fmt(evaluate(text, variablesLenient(S.doc)), 4)}`; } catch (e) { return '?'; }
+}
+
+/** Per variable: its value, or the error that keeps it from having one. */
+function varStates() {
+  const env = {}, seen = new Set();
+  return (S.doc.variables || []).map(v => {
+    const name = String(v.name ?? '').trim();
+    const nameErr = !NAME.test(name) ? 'use letters, digits and _, not starting with a digit'
+      : seen.has(name) ? 'this name is already used' : null;
+    seen.add(name);
+    try {
+      const value = evaluate(v.value, env);
+      if (!nameErr) env[name] = value;
+      return { value, nameErr };
+    } catch (e) { return { error: e.message, nameErr }; }
+  });
+}
+
+function renderVars() {
+  const vars = S.doc.variables || [];
+  const st = varStates();
+  $('#varList').innerHTML = vars.length ? vars.map((v, i) => `<li data-i="${i}">
+      <input data-vk="name" value="${esc(v.name)}" spellcheck="false" autocomplete="off" aria-label="Variable name" class="${st[i].nameErr ? 'bad' : ''}" title="${esc(st[i].nameErr || '')}">
+      <input data-vk="value" value="${esc(v.value)}" spellcheck="false" autocomplete="off" aria-label="Value" class="${st[i].error ? 'bad' : ''}" title="${esc(st[i].error || '')}">
+      <span class="val">${st[i].error || typeof v.value === 'number' ? '' : fmt(st[i].value, 4)}</span>
+      <button data-a="del" title="Delete">${TRASH}</button></li>`).join('')
+    : '<li class="empty-v">Name a dimension here, then type its name in any number field.</li>';
+}
+
+/** Refresh what depends on variable values without rebuilding the inputs being typed in. */
+function refreshVarValues() {
+  const st = varStates();
+  $$('#varList li[data-i]').forEach((li, i) => {
+    const v = S.doc.variables[i];
+    const [n, val] = li.querySelectorAll('input');
+    n.classList.toggle('bad', !!st[i].nameErr); n.title = st[i].nameErr || '';
+    val.classList.toggle('bad', !!st[i].error); val.title = st[i].error || '';
+    li.querySelector('.val').textContent = st[i].error || typeof v.value === 'number' ? '' : fmt(st[i].value, 4);
+  });
+  $$('#props input.expr').forEach(inp => { inp.nextElementSibling.textContent = exprValue(inp.value); });
+}
+
+let varBefore = null;
+$('#btnAddVar').addEventListener('click', () => {
+  if (S.editing) finishEdit();
+  const before = snap();
+  const vars = S.doc.variables ??= [];
+  let n = 1;
+  while (vars.some(v => v.name === `v${n}`)) n++;
+  vars.push({ name: `v${n}`, value: 0 });
+  commit(before);
+  renderVars();
+  const inp = $('#varList li:last-child input');
+  inp.focus(); inp.select();
+});
+$('#varList').addEventListener('input', e => {
+  const li = e.target.closest('li[data-i]'), k = e.target.dataset.vk;
+  if (!li || !k) return;
+  varBefore ??= snap();
+  const raw = e.target.value;
+  S.doc.variables[+li.dataset.i][k] = k === 'value' && raw.trim() !== '' && isFinite(+raw) ? +raw : raw.trim();
+  refreshVarValues();
+  scheduleRegen();
+});
+$('#varList').addEventListener('change', () => {
+  if (varBefore) commit(varBefore);
+  varBefore = null;
+});
+$('#varList').addEventListener('click', e => {
+  const li = e.target.closest('li[data-i]');
+  if (!li || e.target.closest('button')?.dataset.a !== 'del') return;
+  const before = snap();
+  S.doc.variables.splice(+li.dataset.i, 1);
+  commit(before);
+  renderVars();
+  refreshVarValues();
+  scheduleRegen(0);
+});
+
 function renderAll() {
   renderTree();
+  renderVars();
   renderProps();
   renderBodies();
   renderInfo();
@@ -967,6 +1071,9 @@ function newPart() {
 const ACTIONS = {
   new: newPart, example: () => loadExample(), save: saveProject,
   'example-bridges': () => loadExample('examples/bridges.json', { analyze: true }),
+  'example-chair': () => loadExample('examples/chair.json', { analyze: true }),
+  'example-pallet': () => loadExample('examples/pallet_lift.json', { analyze: true }),
+  'example-chaise': () => loadExample('examples/chaise.json', { analyze: true }),
   open: () => $('#fileOpen').click(), import: () => $('#fileUsd').click(),
   'exp-usd-brep': () => exportAs('usd-brep'), 'exp-usdc': () => exportAs('usdc'),
   'exp-usd-mesh': () => exportAs('usd-mesh'), 'exp-stl': () => exportAs('stl'),

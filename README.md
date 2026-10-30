@@ -104,6 +104,12 @@ or select two bodies before you press a **Combine** tool. While you pick edges
 or faces for a feature, the model rolls back to the state just before that
 feature.
 
+**Variables** (left panel) are named numbers, such as `tf = 3`. Any number field
+takes an expression over them (`40 - tf`, `bf / 2`, `max(tw, 2)`), and so does each
+coordinate of a polyline (`50 + bf/2, H - tf`). The field shows the value it works out
+to. Change a variable and every feature that uses it follows. Angles in `sin`, `cos` and
+`tan` are in degrees.
+
 ## Analyze: stress on your GPU, in the browser
 
 ![Analyze mode on the example bracket](docs/analyze-mode.jpg)
@@ -169,6 +175,84 @@ How to read it:
 - On a laptop with two GPUs, browsers often get the integrated one. The panel says which
   GPU it is using; set your browser to *High performance* in Windows Settings › System ›
   Display › Graphics and fully restart it for several times faster results.
+
+### Explore: let it find a lighter design
+
+*Explore variants*, at the bottom of the Analyze panel, solves many versions of a body
+and plots mass against deflection. Tick the variables to vary and give each a range;
+optionally set a maximum deflection and a maximum stress. ScriptCAD spreads the variants
+evenly over the ranges, rebuilds and solves each one exactly like a normal analysis, and
+marks the ones that meet the limits. A line joins the best trade-offs: the variants that
+no other variant beats on both mass and deflection. Click a dot, or **Use it** on the
+suggestion, and its values go into your variables. The result is your own feature tree
+with new numbers in it, not a mesh to redraw.
+
+In the bridge example the girder is drawn from four variables: flange width `bf`, flange
+thickness `tf`, web thickness `tw` and depth `H`. Varying the first three over ±50%
+with a 15 µm deflection limit takes 25 solves (about 2.5 minutes on integrated graphics):
+
+| I-girder | bf | tf | tw | Mass | Deflection | Stress (99th pct) | Stiffness per gram |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| As drawn | 20 | 3 | 3 | 349 g | 10.5 µm | 15.4 MPa | 4.5× |
+| Lightest under 15 µm | 10.1 | 3.3 | 1.9 | **204 g (−41%)** | 14.9 µm | 23.9 MPa | **5.4×** |
+
+Narrow, thick flanges on a thin web: the steel goes to the top and bottom of the
+section, where it carries the most bending load. The girder as drawn (the ring) is not on
+the line at all: some variants are both lighter and stiffer. Limits use the
+99th-percentile stress, never the peak, which grows without bound next to supports and
+loads.
+
+![Explore: 25 girder variants, mass against deflection; grey dots miss the 15 µm limit](docs/bridges-explore.jpg)
+
+### Remove unused material: let the load decide the shape
+
+Explore changes numbers in your design. *Remove unused material*, below it, needs no
+design at all. It keeps the body's outer dimensions and carves the inside voxel by voxel:
+solve, drop the voxels that store the least strain energy, solve again. Each step removes
+3% of the material until you reach the share you chose (5–70%), or, with a *Max deflection*,
+until the next step would deflect more than that. Scores are smoothed over the *Smallest
+member* size, so the shape doesn't break up into a checkerboard, and voids next to busy
+material can fill back in. Material at supports and loads always stays, and any piece that
+loses its connection to a support is removed. This is BESO (bi-directional evolutionary
+structural optimisation). It runs in the browser on the GPU solver. After every step the
+viewport shows the shape as a smoothed surface, coloured by how hard the material works,
+with the original body as a ghost. *Surface → Voxels* shows the design as solved.
+
+Carving the solid slab down to half its steel takes 32 solves (72 s on integrated
+graphics). Cut through the middle of its width, the result is a truss: a top chord over
+the whole span, a bottom chord across the middle, and diagonal struts carrying the load
+out to the clamped ends.
+
+| Solid slab | Mass | Deflection | Stiffness per gram |
+|---|---:|---:|---:|
+| Original | 502 g | 32.6 µm | 1× |
+| Carved to 50% | 251 g | 45.6 µm | **1.4×** |
+
+A slab half as deep, the obvious way to halve the steel, would have an eighth of the
+bending stiffness.
+The result is a voxel mesh (**Download STL**), not editable features: use it to redraw the
+part, or print it.
+
+![The slab carved to 50%, cut through the middle of its width (black is removed material)](docs/bridges-carved.jpg)
+
+**How accurate is it?** On the standard MBB beam, Carve's designs are within 1–2% of the
+stiffness of a SIMP reference (the method of the classic 88-line code), as long as the
+smallest member spans at least about 3 voxels. Below that they fall well short. The layout
+of the slab is the same at Normal and Fine resolution. Carve maximises stiffness for one
+load case: it doesn't check strength or buckling, and a design tuned for one load can do
+worse under another. See [bench/topo](bench/topo/README.md).
+
+### More carving examples (File menu)
+
+| Example | Set-up | Result |
+|---|---|---|
+| **Lounge chair** | a long, low block with three feet, seat and reclined back as the loaded faces (aluminium, 8%) | struts fan out of the rear foot into seat and back, slim front legs |
+| **Chaise longue** | a 160 cm curved lying surface on four feet (ABS, 10%); a body-weight load distribution is in `bench/topo/chaise_carve.js` | a branching tree grows from each foot |
+| **B1 pile table** | the platform that lifts a pallet with a B1 paper pile into a press feeder, on four chain lugs (steel) | at equal mass 1.5× stiffer than a welded tube frame; see [PALLET.md](bench/topo/PALLET.md) |
+
+![Lounge chair carved to 8%](docs/lounge-chair-side.jpg)
+![Chaise longue carved to 10%](docs/chaise-carved-side.jpg)
+![B1 pile table from below: welded frame, carved to the same mass, carved to the same stiffness](docs/pile-table-designs.jpg)
 
 ## How it works
 

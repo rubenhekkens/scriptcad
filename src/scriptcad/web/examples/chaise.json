@@ -1,0 +1,34 @@
+{
+  "name": "Carved chaise longue",
+  "variables": [
+    {"name": "W", "value": 560},
+    {"name": "foot", "value": 50},
+    {"name": "tp", "value": 12}
+  ],
+  "features": [
+    {"id": "env", "type": "extrude", "name": "Volume under the lying surface (side profile)", "params": {"plane": "YZ", "profile": "polyline",
+      "points": "0, 0; 0, 480; 250, 470; 500, 430; 700, 360; 850, 310; 950, 300; 1050, 320; 1200, 400; 1350, 500; 1480, 600; 1600, 690; 1600, 0",
+      "dist": "W", "offset": 0, "cx": 0, "cy": 0}},
+    {"id": "f1", "type": "box", "name": "Foot front left", "params": {"x": 40, "y": 325, "z": "-tp", "l": "foot", "w": "foot", "h": "tp"}},
+    {"id": "f2", "type": "box", "name": "Foot front right", "params": {"x": "W - 40 - foot", "y": 325, "z": "-tp", "l": "foot", "w": "foot", "h": "tp"}},
+    {"id": "f3", "type": "box", "name": "Foot back left", "params": {"x": 40, "y": 1195, "z": "-tp", "l": "foot", "w": "foot", "h": "tp"}},
+    {"id": "f4", "type": "box", "name": "Foot back right", "params": {"x": "W - 40 - foot", "y": 1195, "z": "-tp", "l": "foot", "w": "foot", "h": "tp"}},
+    {"id": "u1", "type": "boolean", "name": "Add foot front left", "params": {"op": "union", "target": "env", "tool": "f1", "keep_tool": false}},
+    {"id": "u2", "type": "boolean", "name": "Add foot front right", "params": {"op": "union", "target": "env", "tool": "f2", "keep_tool": false}},
+    {"id": "u3", "type": "boolean", "name": "Add foot back left", "params": {"op": "union", "target": "env", "tool": "f3", "keep_tool": false}},
+    {"id": "u4", "type": "boolean", "name": "Add foot back right", "params": {"op": "union", "target": "env", "tool": "f4", "keep_tool": false}}
+  ],
+  "analysis": {
+    "body": "env",
+    "material": "abs",
+    "quality": "normal",
+    "live": false,
+    "load": {"type": "force", "vector": [0, 0, -1200], "pressure": 1, "torque": 10, "axis": "Z"},
+    "bodies": {
+      "env": {"fixed": [[65, 350, -12], [495, 350, -12], [65, 1220, -12], [495, 1220, -12]],
+              "loads": [[280, 125, 475], [280, 375, 450], [280, 600, 395], [280, 775, 335], [280, 900, 305],
+                        [280, 1000, 310], [280, 1125, 360], [280, 1275, 450], [280, 1415, 550], [280, 1540, 645]]}
+    },
+    "carve": {"keep": 0.1, "defl": null, "detail": "fine", "smooth": true}
+  }
+}

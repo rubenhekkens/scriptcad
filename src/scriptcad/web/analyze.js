@@ -9,6 +9,8 @@
 // are shared, so several designs can be compared under identical conditions.
 
 import { fieldColor } from './viewer.js';
+import { createExplore } from './explore.js';
+import { createCarve } from './carve.js';
 
 // not in the stress colour ramp (blue -> teal -> yellow -> red), so they read on top of results
 const MARK = { fixed: 0x2fe06b, load: 0xff4fd8 };
@@ -65,7 +67,7 @@ function parseField(buf) {
   return { positions, normals, vonMises, displacement, triFace };
 }
 
-export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onChange }) {
+export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onChange, setVariables }) {
   let on = false;
   let pickTarget = null;           // 'fixed' | 'load' | null
   let solver = null, gpu = null, gpuError = null;
@@ -178,6 +180,39 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
     timer = setTimeout(() => run(ids), delay);
   }
 
+  async function gpuSolver() {
+    await ensureSolver();
+    if (!solver) throw new Error(`WebGPU is not available in this browser (${gpuError}). Use a recent Chrome or Edge.`);
+    return solver;
+  }
+
+  /** The server's voxel model of one body of `doc`, with this setup's supports and load. */
+  async function buildCase(doc, id) {
+    const a = setup(), bs = a.bodies[id];
+    const payload = { doc, setup: { body: id, material: a.material, quality: a.quality, fixed: bs.fixed,
+                                    load: { ...a.load, faces: bs.loads } } };
+    const r = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (!r.ok) throw new Error(`${bodyLabel(id)}: ${(await r.json().catch(() => ({}))).detail || r.statusText}`);
+    return { caseId: r.headers.get('X-Case-Id'), meta: JSON.parse(r.headers.get('X-Meta') || '{}'), blob: await r.arrayBuffer() };
+  }
+
+  /**
+   * One body of `doc`: the server voxelizes it, the GPU solves, the server computes the
+   * stresses. field=false returns the statistics only (Explore). say(text) reports progress.
+   */
+  async function solveOne(doc, id, field = true, say = () => {}) {
+    await gpuSolver();
+    say('building the voxel model…');
+    const { caseId, meta, blob } = await buildCase(doc, id);
+    say(`solving ${meta.free_dofs.toLocaleString()} unknowns on the GPU…`);
+    const sol = await solver.solveMG(blob, { tol: 1e-6 });
+    say('computing stresses…');
+    const rr = await fetch(`/api/analyze/result?id=${caseId}${field ? '' : '&field=false'}`, { method: 'POST', body: sol.u });
+    if (!rr.ok) throw new Error(`${bodyLabel(id)}: ${(await rr.json().catch(() => ({}))).detail || rr.statusText}`);
+    const stats = JSON.parse(rr.headers.get('X-Stats') || '{}');
+    return { meta, stats, sol, field: field ? parseField(await rr.arrayBuffer()) : null };
+  }
+
   /** Solve the given bodies (default: every body that is set up), one after another. */
   async function run(ids = readyIds()) {
     ids = ids.filter(ready);
@@ -185,29 +220,9 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
     const my = ++seq;
     busy = true;
     try {
-      await ensureSolver();
-      if (!solver) throw new Error(`WebGPU is not available in this browser (${gpuError}). Use a recent Chrome or Edge.`);
-      const a = setup();
       for (const [k, id] of ids.entries()) {
         const tag = ids.length > 1 ? `${bodyLabel(id)} (${k + 1}/${ids.length}): ` : '';
-        status = `${tag}building the voxel model…`; render();
-        const bs = a.bodies[id];
-        const payload = { doc: S.doc, setup: { body: id, material: a.material, quality: a.quality, fixed: bs.fixed,
-                                               load: { ...a.load, faces: bs.loads } } };
-        const r = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        if (!r.ok) throw new Error(`${bodyLabel(id)}: ${(await r.json().catch(() => ({}))).detail || r.statusText}`);
-        const caseId = r.headers.get('X-Case-Id');
-        const meta = JSON.parse(r.headers.get('X-Meta') || '{}');
-        const blob = await r.arrayBuffer();
-        if (my !== seq) return;
-        status = `${tag}solving ${meta.free_dofs.toLocaleString()} unknowns on the GPU…`; render();
-        const sol = await solver.solveMG(blob, { tol: 1e-6 });
-        if (my !== seq) return;
-        status = `${tag}computing stresses…`; render();
-        const rr = await fetch(`/api/analyze/result?id=${caseId}`, { method: 'POST', body: sol.u });
-        if (!rr.ok) throw new Error(`${bodyLabel(id)}: ${(await rr.json().catch(() => ({}))).detail || rr.statusText}`);
-        const stats = JSON.parse(rr.headers.get('X-Stats') || '{}');
-        const field = parseField(await rr.arrayBuffer());
+        const { meta, stats, sol, field } = await solveOne(S.doc, id, true, s => { if (my === seq) { status = tag + s; render(); } });
         if (my !== seq) return;
         results.set(id, { meta, stats, values: field.vonMises, displacement: field.displacement,
                           mesh: { positions: field.positions, normals: field.normals, triFace: field.triFace },
@@ -280,10 +295,31 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
     }
   }
 
+  // Explore and Carve share the GPU with Run: whichever starts last cancels the others. A
+  // queued live run waits until they are done, then solves whatever is still missing.
+  const gate = {
+    start() { clearTimeout(timer); busy = true; status = ''; return ++seq; },
+    alive: t => t === seq,
+    end(t) {
+      if (t !== seq) return;
+      busy = false;
+      const missing = readyIds().filter(id => !results.get(id) || results.get(id).stale);
+      if (on && setup().live && missing.length) schedule(missing, 0);
+    },
+    cancel() { seq++; busy = false; },
+    idle: () => !busy,
+  };
+  const explore = createExplore({
+    S, setup, bodyLabel, setVariables, toast, gate, render: () => render(),
+    solveStats: (doc, id) => solveOne(doc, id, false),
+  });
+  const carve = createCarve({ S, setup, gate, viewer, bodyLabel, buildCase, gpuSolver, toast, render: () => render() });
+
   // ---- panel ---------------------------------------------------------------------
   let host = null;
   function render() {
-    if (!host || !on) return;
+    // the panel is shared with the feature editor, which wins while a feature is open
+    if (!host || !on || S.editing) return;
     const a = setup();
     const list = solids();
     const active = list.some(b => b.id === a.body) ? a.body : null;   // display only: the model may still be loading
@@ -390,13 +426,15 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
       ${compare}
       ${legend}
       ${detail}
+      ${explore.html()}
+      ${carve.html()}
       ${gpuLine}`;
   }
 
   function bind(el) {
     host = el;
     el.addEventListener('click', e => {
-      if (!on) return;
+      if (!on || explore.onClick(e) || carve.onClick(e)) return;
       const a = setup();
       if (e.target.id === 'anRun') return run([a.body]);
       if (e.target.id === 'anRunAll') return run();
@@ -419,6 +457,7 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
     });
     el.addEventListener('change', e => {
       if (!on) return;
+      if (explore.onChange(e) || carve.onChange(e)) return onChange();
       const a = setup(), L = a.load, t = e.target, k = t.dataset.ak;
       if (t.dataset.acap !== undefined) { cap = t.value; return apply(); }
       if (t.dataset.aview !== undefined) { view = t.value; return apply(); }
@@ -455,7 +494,7 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
     render,
     stopPick() { if (pickTarget) startPick(pickTarget); },
     /** Forget results, e.g. when a different project is loaded. */
-    reset() { results.clear(); seq++; busy = false; status = ''; if (on) { viewer.clearField(); syncMarks(); render(); } },
+    reset() { results.clear(); explore.reset(); carve.reset(); seq++; busy = false; status = ''; if (on) { viewer.clearField(); syncMarks(); render(); } },
     async toggle(next = !on) {
       on = next;
       pickTarget = null;
@@ -467,6 +506,7 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
         if (fresh().length) apply(); else if (readyIds().length) schedule(readyIds(), 0);
       } else {
         clearTimeout(timer);
+        carve.reset();
         seq++;
         busy = false;
         viewer.setMarks([]);
@@ -480,6 +520,7 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
       if (!on) return;
       // the viewer rebuilt the meshes; old fields may not match the new geometry
       for (const r of results.values()) r.stale = true;
+      carve.reset();
       syncMarks();
       if (setup().live && readyIds().length) schedule(readyIds());
       else render();
