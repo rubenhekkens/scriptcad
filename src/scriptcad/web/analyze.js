@@ -9,9 +9,18 @@
 // are shared, so several designs can be compared under identical conditions.
 
 import { fieldColor } from './viewer.js';
+import { createExplore } from './explore.js';
+import { createCarve } from './carve.js';
 
 // not in the stress colour ramp (blue -> teal -> yellow -> red), so they read on top of results
 const MARK = { fixed: 0x2fe06b, load: 0xff4fd8 };
+// underused-material view: material that carries little stress, on neutral grey
+const WASTE = [0.98, 0.66, 0.1], WORK = [0.72, 0.74, 0.78];
+const wasteColor = t => {                     // t = stress / threshold; soft edge over 0.8..1
+  const f = Math.min(Math.max((t - 0.8) / 0.2, 0), 1);
+  return WASTE.map((v, k) => v + (WORK[k] - v) * f);
+};
+const hex = c => `rgb(${c.map(v => Math.round(v * 255)).join(',')})`;
 const DEFAULT_SETUP = () => ({
   body: null, material: 'aluminium', quality: 'normal', live: true,
   load: { type: 'force', vector: [0, 0, -1000], pressure: 1, torque: 10, axis: 'Z' },
@@ -58,7 +67,7 @@ function parseField(buf) {
   return { positions, normals, vonMises, displacement, triFace };
 }
 
-export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onChange }) {
+export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onChange, setVariables }) {
   let on = false;
   let pickTarget = null;           // 'fixed' | 'load' | null
   let solver = null, gpu = null, gpuError = null;
@@ -66,6 +75,7 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
   const results = new Map();       // body id -> { meta, stats, values, displacement, solve, stale, positions }
   let materials = null;
   let cap = 'p99', deform = 0;     // deformation drawn as this fraction of the part size (0 = off)
+  let view = 'stress', idle = 0.2; // 'waste': shade material below idle x the body's 99th-percentile stress
 
   // ---- setup (with migration from the single-body format) --------------------------
   const setup = () => {
@@ -131,7 +141,8 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
     const marks = [];
     for (const [id, b] of Object.entries(setup().bodies)) {
       const shown = results.has(id) && !results.get(id).stale;
-      const opacity = shown ? 0.18 : 0.8;
+      // the underused view is two colours only, so a tint would read as a third: outline only
+      const opacity = shown ? (view === 'waste' ? 0 : 0.18) : 0.8;
       for (const index of faceIndices(id, b.fixed)) marks.push({ bodyId: id, index, color: MARK.fixed, opacity });
       for (const index of faceIndices(id, b.loads)) marks.push({ bodyId: id, index, color: MARK.load, opacity });
     }
@@ -169,6 +180,39 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
     timer = setTimeout(() => run(ids), delay);
   }
 
+  async function gpuSolver() {
+    await ensureSolver();
+    if (!solver) throw new Error(`WebGPU is not available in this browser (${gpuError}). Use a recent Chrome or Edge.`);
+    return solver;
+  }
+
+  /** The server's voxel model of one body of `doc`, with this setup's supports and load. */
+  async function buildCase(doc, id) {
+    const a = setup(), bs = a.bodies[id];
+    const payload = { doc, setup: { body: id, material: a.material, quality: a.quality, fixed: bs.fixed,
+                                    load: { ...a.load, faces: bs.loads } } };
+    const r = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (!r.ok) throw new Error(`${bodyLabel(id)}: ${(await r.json().catch(() => ({}))).detail || r.statusText}`);
+    return { caseId: r.headers.get('X-Case-Id'), meta: JSON.parse(r.headers.get('X-Meta') || '{}'), blob: await r.arrayBuffer() };
+  }
+
+  /**
+   * One body of `doc`: the server voxelizes it, the GPU solves, the server computes the
+   * stresses. field=false returns the statistics only (Explore). say(text) reports progress.
+   */
+  async function solveOne(doc, id, field = true, say = () => {}) {
+    await gpuSolver();
+    say('building the voxel model…');
+    const { caseId, meta, blob } = await buildCase(doc, id);
+    say(`solving ${meta.free_dofs.toLocaleString()} unknowns on the GPU…`);
+    const sol = await solver.solveMG(blob, { tol: 1e-6 });
+    say('computing stresses…');
+    const rr = await fetch(`/api/analyze/result?id=${caseId}${field ? '' : '&field=false'}`, { method: 'POST', body: sol.u });
+    if (!rr.ok) throw new Error(`${bodyLabel(id)}: ${(await rr.json().catch(() => ({}))).detail || rr.statusText}`);
+    const stats = JSON.parse(rr.headers.get('X-Stats') || '{}');
+    return { meta, stats, sol, field: field ? parseField(await rr.arrayBuffer()) : null };
+  }
+
   /** Solve the given bodies (default: every body that is set up), one after another. */
   async function run(ids = readyIds()) {
     ids = ids.filter(ready);
@@ -176,29 +220,9 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
     const my = ++seq;
     busy = true;
     try {
-      await ensureSolver();
-      if (!solver) throw new Error(`WebGPU is not available in this browser (${gpuError}). Use a recent Chrome or Edge.`);
-      const a = setup();
       for (const [k, id] of ids.entries()) {
         const tag = ids.length > 1 ? `${bodyLabel(id)} (${k + 1}/${ids.length}): ` : '';
-        status = `${tag}building the voxel model…`; render();
-        const bs = a.bodies[id];
-        const payload = { doc: S.doc, setup: { body: id, material: a.material, quality: a.quality, fixed: bs.fixed,
-                                               load: { ...a.load, faces: bs.loads } } };
-        const r = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        if (!r.ok) throw new Error(`${bodyLabel(id)}: ${(await r.json().catch(() => ({}))).detail || r.statusText}`);
-        const caseId = r.headers.get('X-Case-Id');
-        const meta = JSON.parse(r.headers.get('X-Meta') || '{}');
-        const blob = await r.arrayBuffer();
-        if (my !== seq) return;
-        status = `${tag}solving ${meta.free_dofs.toLocaleString()} unknowns on the GPU…`; render();
-        const sol = await solver.solveMG(blob, { tol: 1e-6 });
-        if (my !== seq) return;
-        status = `${tag}computing stresses…`; render();
-        const rr = await fetch(`/api/analyze/result?id=${caseId}`, { method: 'POST', body: sol.u });
-        if (!rr.ok) throw new Error(`${bodyLabel(id)}: ${(await rr.json().catch(() => ({}))).detail || rr.statusText}`);
-        const stats = JSON.parse(rr.headers.get('X-Stats') || '{}');
-        const field = parseField(await rr.arrayBuffer());
+        const { meta, stats, sol, field } = await solveOne(S.doc, id, true, s => { if (my === seq) { status = tag + s; render(); } });
         if (my !== seq) return;
         results.set(id, { meta, stats, values: field.vonMises, displacement: field.displacement,
                           mesh: { positions: field.positions, normals: field.normals, triFace: field.triFace },
@@ -234,6 +258,18 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
     return dmax ? (deform || 0.05) * size / dmax : 0;    // largest displacement drawn as that fraction of the largest part
   }
 
+  // Underused material: von Mises below `idle` x the body's own 99th percentile, so the
+  // measure is how evenly a design loads its material, not how stressed it is overall
+  // (a stiffer design has lower stresses everywhere). Volume fraction from voxel percentiles.
+  const idleStress = r => idle * r.stats.p99;
+  function underused(r) {
+    const q = r.stats.vm_pct, s = idleStress(r);
+    if (!q) return null;
+    if (s <= q[0]) return 0;
+    for (let i = 1; i < q.length; i++) if (s <= q[i]) return (i - 1 + (s - q[i - 1]) / ((q[i] - q[i - 1]) || 1)) / 100;
+    return 1;
+  }
+
   function apply() {
     if (!on) return;
     viewer.clearField();
@@ -241,7 +277,8 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
     for (const [id, r] of results) {
       const b = bodies().find(x => x.id === id);
       if (r.stale || !b || b.positions.length !== r.cadLength) { r.stale = true; continue; }
-      viewer.setField(id, r.values, c, r.displacement, r.mesh);
+      if (view === 'waste') viewer.setField(id, r.values, idleStress(r), r.displacement, r.mesh, wasteColor);
+      else viewer.setField(id, r.values, c, r.displacement, r.mesh);
     }
     viewer.setDeformation(deform ? autoScale() : 0);
     syncMarks();
@@ -258,10 +295,31 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
     }
   }
 
+  // Explore and Carve share the GPU with Run: whichever starts last cancels the others. A
+  // queued live run waits until they are done, then solves whatever is still missing.
+  const gate = {
+    start() { clearTimeout(timer); busy = true; status = ''; return ++seq; },
+    alive: t => t === seq,
+    end(t) {
+      if (t !== seq) return;
+      busy = false;
+      const missing = readyIds().filter(id => !results.get(id) || results.get(id).stale);
+      if (on && setup().live && missing.length) schedule(missing, 0);
+    },
+    cancel() { seq++; busy = false; },
+    idle: () => !busy,
+  };
+  const explore = createExplore({
+    S, setup, bodyLabel, setVariables, toast, gate, render: () => render(),
+    solveStats: (doc, id) => solveOne(doc, id, false),
+  });
+  const carve = createCarve({ S, setup, gate, viewer, bodyLabel, buildCase, gpuSolver, toast, render: () => render() });
+
   // ---- panel ---------------------------------------------------------------------
   let host = null;
   function render() {
-    if (!host || !on) return;
+    // the panel is shared with the feature editor, which wins while a feature is open
+    if (!host || !on || S.editing) return;
     const a = setup();
     const list = solids();
     const active = list.some(b => b.id === a.body) ? a.body : null;   // display only: the model may still be loading
@@ -290,18 +348,22 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
       const stiff = r => (r.stats.max_displacement ? 1 / r.stats.max_displacement : 0) / (r.meta.mass_g || 1);
       const vals = f => rows.map(([, r]) => f(r));
       const bMass = Math.min(...vals(r => r.meta.mass_g)), bDisp = Math.min(...vals(r => r.stats.max_displacement)),
-            bP99 = Math.min(...vals(r => r.stats.p99)), bStiff = Math.max(...vals(stiff)), ref = Math.min(...vals(stiff));
-      const td = (isBest, text) => `<td class="${isBest ? 'best' : ''}">${text}</td>`;
+            bP99 = Math.min(...vals(r => r.stats.p99)), bStiff = Math.max(...vals(stiff)), ref = Math.min(...vals(stiff)),
+            bIdle = Math.min(...vals(r => underused(r) ?? 1));
+      const td = (isBest, text, title = '') => `<td class="${isBest ? 'best' : ''}"${title ? ` title="${title}"` : ''}>${text}</td>`;
+      const pct = Math.round(idle * 100);
       compare = `
-        <table class="compare"><thead><tr><th>Design</th><th>Mass</th><th title="Largest displacement">Defl.</th><th title="Von Mises, 99th percentile">Stress</th><th title="Stiffness per gram, relative to the lowest">Stiff/g</th></tr></thead><tbody>
-        ${rows.map(([id, r]) => `<tr class="${id === a.body ? 'on' : ''}" data-abody="${id}"><td>${esc(bodyLabel(id))}</td>
+        <table class="compare"><thead><tr><th>Design</th><th>Mass</th><th title="Largest displacement">Defl.</th><th title="Von Mises, 99th percentile">Stress</th><th title="Stiffness per gram, relative to the lowest">Stiff/g</th><th title="Share of the volume below ${pct}% of the design's own 99th-percentile stress">Idle</th></tr></thead><tbody>
+        ${rows.map(([id, r]) => { const u = underused(r); return `<tr class="${id === a.body ? 'on' : ''}" data-abody="${id}"><td>${esc(bodyLabel(id))}</td>
           ${td(r.meta.mass_g === bMass, `${fmt(r.meta.mass_g)} g`)}
           ${td(r.stats.max_displacement === bDisp, `${fmt(r.stats.max_displacement * 1000)} µm`)}
           ${td(r.stats.p99 === bP99, `${fmt(r.stats.p99)}<small> MPa</small>`)}
-          ${td(stiff(r) === bStiff, `${fmt(stiff(r) / ref, 2)}×`)}</tr>`).join('')}
+          ${td(stiff(r) === bStiff, `${fmt(stiff(r) / ref, 2)}×`)}
+          ${u == null ? '<td>—</td>' : td(u === bIdle, `${Math.round(u * 100)}%`, `${fmt(u * r.meta.mass_g, 2)} g underused`)}</tr>`; }).join('')}
         </tbody></table>
         <div class="muted small">Same material, load and type of supports for every design; best in each column highlighted.
-          Defl. = largest deflection, Stress = 99th-percentile von Mises, Stiff/g = stiffness per gram relative to the lowest.</div>`;
+          Defl. = largest deflection, Stress = 99th-percentile von Mises, Stiff/g = stiffness per gram relative to the lowest,
+          Idle = share of the material carrying less than ${pct}% of the design's own 99th-percentile stress.</div>`;
     }
     const r = a.body && results.get(a.body);
     const detail = r && !r.stale ? `
@@ -311,16 +373,28 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
         <dt>Max away from loads/supports</dt><dd>${fmt(r.stats.max_away)} MPa</dd>
         <dt title="Next to supports and load faces the peak is singular: it keeps rising as voxels get finer">Max at loads (not converged) ⓘ</dt><dd>${fmt(r.stats.max)} MPa</dd>
         <dt>Max displacement</dt><dd>${fmt(r.stats.max_displacement * 1000)} µm</dd>
+        ${underused(r) == null ? '' : `<dt title="Below ${Math.round(idle * 100)}% of this body's 99th-percentile stress">Underused material</dt>
+          <dd>${Math.round(underused(r) * 100)}% (${fmt(underused(r) * r.meta.mass_g, 2)} g)</dd>`}
       </dl>
       <div class="muted small">${esc(bodyLabel(a.body))}: ${r.meta.solid_voxels.toLocaleString()} voxels of ${r.meta.h} mm · ${r.meta.free_dofs.toLocaleString()} unknowns ·
         solved in ${fmt(r.solve.ms / 1000, 2)} s (${r.solve.iterations} multigrid iterations) · ${esc(r.meta.material)}, ${esc(r.meta.applied)}</div>` :
       ([...results.values()].some(x => x.stale) ? '<div class="hint">The model changed since the last run. Press Run.</div>' : '');
-    const legend = rows.length ? `
-      <div class="legend"><div class="bar" style="background:linear-gradient(90deg,${[0, .25, .5, .75, 1].map(t => `rgb(${fieldColor(t).map(v => Math.round(v * 255)).join(',')})`).join(',')})"></div>
+    const scale = view === 'waste' ? `
+      <div class="legend waste"><span><i style="background:${hex(WASTE)}"></i>underused</span><span><i style="background:${hex(WORK)}"></i>working</span></div>
+      <div class="field"><label for="an_idle">Underused below</label><select id="an_idle" data-aidle>
+        ${[0.1, 0.2, 0.3].map(v => `<option value="${v}" ${v === idle ? 'selected' : ''}>${v * 100}% of the 99th-pct stress</option>`).join('')}</select></div>
+      <div class="muted small">Shaded material carries little load in this load case: a candidate for removal, or for moving
+        to where it would work (further from the middle of a bending section, for example). Each body is judged against
+        its own stress level. Only the surface is shaded; the Idle column counts the whole volume.</div>` : `
+      <div class="legend"><div class="bar" style="background:linear-gradient(90deg,${[0, .25, .5, .75, 1].map(t => hex(fieldColor(t))).join(',')})"></div>
         <div class="ticks"><span>0</span><span>${fmt(cv / 2)}</span><span>${fmt(cv)} MPa${cap === 'max' ? '' : '+'}</span></div></div>
       <div class="field"><label for="an_cap">Colour scale</label><select id="an_cap" data-acap>
         ${[['p99', 'to 99th percentile'], ['p999', 'to 99.9th percentile'], ['away', 'to max away from loads'], ['max', 'to absolute max']]
-          .map(([v, l]) => `<option value="${v}" ${v === cap ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+          .map(([v, l]) => `<option value="${v}" ${v === cap ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`;
+    const legend = rows.length ? `
+      <div class="field"><label for="an_view">Show</label><select id="an_view" data-aview>
+        ${[['stress', 'Stress'], ['waste', 'Underused material']].map(([v, l]) => `<option value="${v}" ${v === view ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      ${scale}
       <div class="field"><label for="an_def">Deformed shape</label><select id="an_def" data-adeform>
         ${[[0, 'Off'], [0.05, 'Exaggerated'], [0.15, 'Strongly exaggerated']].map(([v, l]) => `<option value="${v}" ${v === deform ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       ${deform ? `<div class="muted small">Displacements drawn ×${fmt(autoScale(), 2)}, the same for every body.</div>` : ''}` : '';
@@ -352,13 +426,15 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
       ${compare}
       ${legend}
       ${detail}
+      ${explore.html()}
+      ${carve.html()}
       ${gpuLine}`;
   }
 
   function bind(el) {
     host = el;
     el.addEventListener('click', e => {
-      if (!on) return;
+      if (!on || explore.onClick(e) || carve.onClick(e)) return;
       const a = setup();
       if (e.target.id === 'anRun') return run([a.body]);
       if (e.target.id === 'anRunAll') return run();
@@ -381,8 +457,11 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
     });
     el.addEventListener('change', e => {
       if (!on) return;
+      if (explore.onChange(e) || carve.onChange(e)) return onChange();
       const a = setup(), L = a.load, t = e.target, k = t.dataset.ak;
       if (t.dataset.acap !== undefined) { cap = t.value; return apply(); }
+      if (t.dataset.aview !== undefined) { view = t.value; return apply(); }
+      if (t.dataset.aidle !== undefined) { idle = +t.value; return apply(); }
       if (t.dataset.adeform !== undefined) { deform = +t.value; viewer.setDeformation(deform ? autoScale() : 0); syncMarks(); return render(); }
       if (!k) return;
       const v = t.type === 'number' ? +t.value : t.type === 'checkbox' ? t.checked : t.value;
@@ -415,7 +494,7 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
     render,
     stopPick() { if (pickTarget) startPick(pickTarget); },
     /** Forget results, e.g. when a different project is loaded. */
-    reset() { results.clear(); seq++; busy = false; status = ''; if (on) { viewer.clearField(); syncMarks(); render(); } },
+    reset() { results.clear(); explore.reset(); carve.reset(); seq++; busy = false; status = ''; if (on) { viewer.clearField(); syncMarks(); render(); } },
     async toggle(next = !on) {
       on = next;
       pickTarget = null;
@@ -427,6 +506,7 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
         if (fresh().length) apply(); else if (readyIds().length) schedule(readyIds(), 0);
       } else {
         clearTimeout(timer);
+        carve.reset();
         seq++;
         busy = false;
         viewer.setMarks([]);
@@ -440,6 +520,7 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
       if (!on) return;
       // the viewer rebuilt the meshes; old fields may not match the new geometry
       for (const r of results.values()) r.stale = true;
+      carve.reset();
       syncMarks();
       if (setup().live && readyIds().length) schedule(readyIds());
       else render();

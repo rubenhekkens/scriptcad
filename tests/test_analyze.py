@@ -50,6 +50,10 @@ def test_force_is_reacted_by_the_supports():
     assert 0 < s["p50"] < s["p99"] < s["max"]
     assert s["max_away"] <= s["max"]
     assert 0 < s["max_displacement"] < 0.1                                # mm
+    # voxel percentiles (volume fractions) for the underused-material view
+    q = s["vm_pct"]
+    assert len(q) == 101 and all(a <= b for a, b in zip(q, q[1:]))
+    assert q[99] == pytest.approx(s["p99"], rel=1e-3) and q[100] == pytest.approx(s["max"], rel=1e-3)
 
 
 def test_result_is_shown_on_a_refined_copy_of_the_viewer_mesh():
@@ -69,6 +73,13 @@ def test_result_is_shown_on_a_refined_copy_of_the_viewer_mesh():
     # the sampled field reaches the solver's maximum displacement
     dmax = np.linalg.norm(res["displacement"], axis=1).max()
     assert dmax == pytest.approx(res["stats"]["max_displacement"], rel=0.05)
+
+
+def test_stats_only_result_matches_the_full_one():
+    _, _, u, meta, full = _run({"type": "force", "vector": [0, 0, -2000]})
+    cid = next(reversed(analyze._cases))
+    only = analyze.result(cid, u.astype(np.float32), field=False)
+    assert set(only) == {"stats"} and only["stats"] == full["stats"]
 
 
 def test_result_blob_layout():

@@ -41,6 +41,9 @@
           <button data-act="new">New part</button>
           <button data-act="example">Load example part</button>
           <button data-act="example-bridges">Load bridge example (stress comparison)</button>
+          <button data-act="example-chair">Load chair example (carve a lounge chair)</button>
+          <button data-act="example-pallet">Load B1 pile table example (pallet lift)</button>
+          <button data-act="example-chaise">Load chaise longue example (carve)</button>
           <button data-act="open">Open project… <kbd>Ctrl+O</kbd></button>
           <button data-act="save">Save project <kbd>Ctrl+S</kbd></button>
           <hr>
@@ -64,6 +67,8 @@
       <section class="panel tree-panel" id="treePanel">
         <div class="panel-h"><span>History</span><span class="muted" id="featCount"></span></div>
         <ol class="tree" id="tree"></ol>
+        <div class="panel-h sub"><span>Variables</span><button class="chip" id="btnAddVar" title="Add a variable; use its name in any number field, e.g. 40 - tf">+ Add</button></div>
+        <ul class="vars" id="varList"></ul>
         <div class="panel-h sub"><span>Bodies</span></div>
         <ul class="bodies" id="bodyList"></ul>
       </section>
