@@ -17,6 +17,10 @@ There are two ways to model, and both use the same viewport:
 Exports: STEP (AP214), exact BRep as OpenUSD (`.usda` / `.usdc`, `BrepArray` prims),
 tessellated `UsdGeomMesh`, and STL.
 
+**Try it online:** [huggingface.co/spaces/mcsnekkeh/scriptcad](https://huggingface.co/spaces/mcsnekkeh/scriptcad)
+(Chrome or Edge on a computer; it opens with the chair below, press **Run all** and then
+**Carve**. The online demo has no Script tab or voice; install it for everything.)
+
 ## Carve: the stiffest shape for its weight
 
 ![A block carved into a chair: the solid block, halfway, the result](docs/bone-chair-carve.jpg)
