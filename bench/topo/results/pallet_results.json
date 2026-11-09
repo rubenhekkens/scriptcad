@@ -1,0 +1,83 @@
+{
+  "meta": {
+    "h_mm": 6.59,
+    "grid": [
+      200,
+      169,
+      23
+    ],
+    "unknowns": 1897248,
+    "seconds": 371,
+    "gpu": "RTX 5070 (Chrome, WebGPU)",
+    "units": "deflection and sag in micrometres, compliance in N.mm"
+  },
+  "designs": {
+    "solid": {
+      "kg": 1331.9,
+      "share": 1.0,
+      "LC1": {
+        "defl": 9.1,
+        "sag": 8.5,
+        "compliance": 81.8
+      },
+      "LC2": {
+        "defl": 6.2,
+        "sag": 2.6,
+        "compliance": 28.1
+      }
+    },
+    "frame": {
+      "kg": 275.0,
+      "share": 0.206,
+      "LC1": {
+        "defl": 52.8,
+        "sag": 50.3,
+        "compliance": 412.4
+      },
+      "LC2": {
+        "defl": 45.2,
+        "sag": 29.9,
+        "compliance": 161.4
+      }
+    },
+    "E1_same_mass": {
+      "kg": 275.0,
+      "share": 0.206,
+      "LC1": {
+        "defl": 34.9,
+        "sag": 31.0,
+        "compliance": 257.4
+      },
+      "LC2": {
+        "defl": 40.3,
+        "sag": 27.2,
+        "compliance": 149.5
+      },
+      "optimiser": {
+        "stop": "target reached",
+        "steps": 61,
+        "min_share": 0.097
+      }
+    },
+    "E2_same_stiffness": {
+      "kg": 241.3,
+      "share": 0.181,
+      "LC1": {
+        "defl": 43.1,
+        "sag": 37.3,
+        "compliance": 309.2
+      },
+      "LC2": {
+        "defl": 56.2,
+        "sag": 41.1,
+        "compliance": 190.3
+      },
+      "optimiser": {
+        "stop": "deflection limit",
+        "steps": 58,
+        "target": 0.117,
+        "min_share": 0.097
+      }
+    }
+  }
+}

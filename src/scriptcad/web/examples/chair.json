@@ -1,0 +1,43 @@
+{
+  "name": "Carved lounge chair",
+  "variables": [
+    {"name": "W", "value": 440},
+    {"name": "D", "value": 760},
+    {"name": "H", "value": 750},
+    {"name": "lip", "value": 395},
+    {"name": "seatFront", "value": 370},
+    {"name": "seatRear", "value": 340},
+    {"name": "seatDepth", "value": 440},
+    {"name": "gapY", "value": 470},
+    {"name": "gapZ", "value": 390},
+    {"name": "backTopY", "value": 720},
+    {"name": "P", "value": 40},
+    {"name": "tp", "value": 12},
+    {"name": "footY", "value": 60},
+    {"name": "footX", "value": 30},
+    {"name": "rearFootY", "value": 600}
+  ],
+  "features": [
+    {"id": "env", "type": "extrude", "name": "Block to carve (side profile)", "params": {"plane": "YZ", "profile": "polyline",
+      "points": "0, 0; 0, lip; 70, seatFront; seatDepth, seatRear; gapY, gapZ; backTopY, H; D, H; D, 0",
+      "dist": "W", "offset": 0, "cx": 0, "cy": 0}},
+    {"id": "f1", "type": "box", "name": "Foot front left", "params": {"x": "footX", "y": "footY", "z": "-tp", "l": "P", "w": "P", "h": "tp"}},
+    {"id": "f2", "type": "box", "name": "Foot front right", "params": {"x": "W - footX - P", "y": "footY", "z": "-tp", "l": "P", "w": "P", "h": "tp"}},
+    {"id": "f3", "type": "box", "name": "Foot rear", "params": {"x": "W/2 - P/2", "y": "rearFootY", "z": "-tp", "l": "P", "w": "P", "h": "tp"}},
+    {"id": "u1", "type": "boolean", "name": "Add front left foot", "params": {"op": "union", "target": "env", "tool": "f1", "keep_tool": false}},
+    {"id": "u2", "type": "boolean", "name": "Add front right foot", "params": {"op": "union", "target": "env", "tool": "f2", "keep_tool": false}},
+    {"id": "u3", "type": "boolean", "name": "Add rear foot", "params": {"op": "union", "target": "env", "tool": "f3", "keep_tool": false}}
+  ],
+  "analysis": {
+    "body": "env",
+    "material": "aluminium",
+    "quality": "normal",
+    "live": false,
+    "load": {"type": "force", "vector": [0, 300, -1000], "pressure": 1, "torque": 10, "axis": "Z"},
+    "bodies": {
+      "env": {"fixed": [[50, 80, -12], [390, 80, -12], [220, 620, -12]],
+              "loads": [[220, 255, 355], [220, 595, 570]]}
+    },
+    "carve": {"keep": 0.08, "defl": null, "detail": "fine", "smooth": true}
+  }
+}

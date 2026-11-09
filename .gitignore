@@ -9,3 +9,4 @@ __pycache__/
 /uploads/
 .claude/
 bench/fea/ref_cache/
+bench/topo/results/*.vxf

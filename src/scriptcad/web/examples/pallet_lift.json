@@ -1,0 +1,33 @@
+{
+  "name": "B1 pile table (pallet lift platform)",
+  "variables": [
+    {"name": "L", "value": 1300},
+    {"name": "W", "value": 1100},
+    {"name": "T", "value": 120},
+    {"name": "lug", "value": 60},
+    {"name": "lugT", "value": 12}
+  ],
+  "features": [
+    {"id": "deck", "type": "box", "name": "Platform envelope", "params": {"x": 0, "y": 0, "z": 0, "l": "L", "w": "W", "h": "T"}},
+    {"id": "c1", "type": "box", "name": "Chain lug 1", "params": {"x": 0, "y": 0, "z": "-lugT", "l": "lug", "w": "lug", "h": "lugT"}},
+    {"id": "c2", "type": "box", "name": "Chain lug 2", "params": {"x": "L - lug", "y": 0, "z": "-lugT", "l": "lug", "w": "lug", "h": "lugT"}},
+    {"id": "c3", "type": "box", "name": "Chain lug 3", "params": {"x": 0, "y": "W - lug", "z": "-lugT", "l": "lug", "w": "lug", "h": "lugT"}},
+    {"id": "c4", "type": "box", "name": "Chain lug 4", "params": {"x": "L - lug", "y": "W - lug", "z": "-lugT", "l": "lug", "w": "lug", "h": "lugT"}},
+    {"id": "u1", "type": "boolean", "name": "Add lug 1", "params": {"op": "union", "target": "deck", "tool": "c1", "keep_tool": false}},
+    {"id": "u2", "type": "boolean", "name": "Add lug 2", "params": {"op": "union", "target": "deck", "tool": "c2", "keep_tool": false}},
+    {"id": "u3", "type": "boolean", "name": "Add lug 3", "params": {"op": "union", "target": "deck", "tool": "c3", "keep_tool": false}},
+    {"id": "u4", "type": "boolean", "name": "Add lug 4", "params": {"op": "union", "target": "deck", "tool": "c4", "keep_tool": false}}
+  ],
+  "analysis": {
+    "body": "deck",
+    "material": "steel",
+    "quality": "normal",
+    "live": false,
+    "load": {"type": "force", "vector": [0, 0, -13000], "pressure": 1, "torque": 10, "axis": "Z"},
+    "bodies": {
+      "deck": {"fixed": [[30, 30, -12], [1270, 30, -12], [30, 1070, -12], [1270, 1070, -12]],
+               "loads": [[650, 550, 120]]}
+    },
+    "carve": {"keep": 0.3, "defl": null, "detail": "medium", "smooth": true}
+  }
+}

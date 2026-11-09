@@ -21,6 +21,8 @@ import traceback
 
 import usd_brep as sm
 
+from .params import resolve_params, variables
+
 # ---------------------------------------------------------------------------
 # Runtime helpers available to features and user scripts
 # ---------------------------------------------------------------------------
@@ -313,6 +315,11 @@ def compile_history(doc):
     """
     features = doc.get("features", [])
     var = _varname_factory(features)
+    # a broken variable only fails the features that use expressions
+    try:
+        env, env_error = variables(doc), None
+    except ValueError as e:
+        env, env_error = {}, str(e)
     live = []
     out = []
     for feat in features:
@@ -322,6 +329,10 @@ def compile_history(doc):
             out.append(entry)
             continue
         try:
+            try:
+                feat = {**feat, "params": resolve_params(feat.get("params", {}), env)}
+            except ValueError as e:
+                raise ValueError(env_error or str(e)) from None
             code, creates, consumes = feature_code(feat, var, set(live))
             entry.update(code=code, creates=creates, consumes=consumes)
         except Exception as e:  # bad parameters: report on the feature
@@ -345,6 +356,12 @@ def history_to_script(doc):
         "import usd_brep as sm",
         "",
     ]
+    try:
+        env = variables(doc)
+    except ValueError:
+        env = {}
+    if env:  # the code below has their values filled in
+        lines += ["# Variables: " + ", ".join(f"{k} = {v:g}" for k, v in env.items()), ""]
     for s in snippets:
         title = names.get(s["id"], s["id"])
         if s.get("skipped"):
