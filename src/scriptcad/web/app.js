@@ -1,6 +1,7 @@
 import { Viewer } from './viewer.js';
 import { FEATURES, CREATES, defaults, visibleFields, liveBodiesBefore, nextName, icon, featureIcon } from './features.js';
 import { createAnalyze } from './analyze.js';
+import { createVR } from './vr.js';
 import { evaluate, variablesLenient, NAME } from './expr.js';
 
 const $ = s => document.querySelector(s);
@@ -66,17 +67,24 @@ const analysis = createAnalyze({
   bodyLabel: id => bodyLabel(id),
   refOf: hit => refOf(hit),
   onChange: () => { persist(); renderRibbonState(); renderProps(); },
-  // Explore: put a variant's values into the variables (one undo step) and rebuild
-  setVariables: values => {
+  // Explore and Pull: put a variant's values into the variables (one undo step, with any
+  // other change `also` makes, such as moved support points) and rebuild
+  setVariables: (values, also) => {
     const before = snap();
     for (const v of S.doc.variables || []) if (v.name in values) v.value = values[v.name];
+    also?.();
     commit(before);
     renderVars();
     scheduleRegen(0);
   },
+  // spoken "undo" and "redo"
+  undo: () => undo(),
+  redo: () => redo(),
 });
 window.scriptcad.analysis = analysis;
 analysis.bind($('#props'));
+// VR: full-size viewing, and Push to load with the controllers
+window.scriptcad.vr = createVR({ viewer, analysis, button: $('#btnVR'), toast: (m, e) => toast(m, e) });
 
 // ---------------------------------------------------------------------------
 // kernel calls
@@ -1074,6 +1082,7 @@ const ACTIONS = {
   'example-chair': () => loadExample('examples/chair.json', { analyze: true }),
   'example-pallet': () => loadExample('examples/pallet_lift.json', { analyze: true }),
   'example-chaise': () => loadExample('examples/chaise.json', { analyze: true }),
+  'example-bone': () => loadExample('examples/bone_chair.json', { analyze: true }),
   open: () => $('#fileOpen').click(), import: () => $('#fileUsd').click(),
   'exp-usd-brep': () => exportAs('usd-brep'), 'exp-usdc': () => exportAs('usdc'),
   'exp-usd-mesh': () => exportAs('usd-mesh'), 'exp-stl': () => exportAs('stl'),
