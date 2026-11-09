@@ -309,3 +309,22 @@ table.explore-vars td:last-child { text-align: right; font: 11.5px var(--mono); 
 .explore-best { display: flex; align-items: center; gap: 10px; background: var(--panel2); border: 1px solid var(--line2); border-radius: 6px; padding: 8px 10px; margin: 8px 0 4px; font-size: 12px; line-height: 1.5; }
 .explore-best > div { flex: 1; }
 .explore-best .btn { flex: none; padding: 0 12px; }
+
+/* Analyze in the viewport: a dock with the interactive tools, and a caption saying what just happened */
+.an-dock { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 5; display: flex; gap: 6px; padding: 6px;
+  background: rgba(13,17,23,.86); backdrop-filter: blur(8px); border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.35); }
+.an-dock button { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 74px; padding: 7px 10px 6px; border-radius: 8px;
+  color: var(--text); font-size: 13px; font-weight: 600; border: 1px solid transparent; }
+.an-dock button small { font-size: 10.5px; font-weight: 400; color: var(--muted); }
+.an-dock button:hover { background: var(--line); }
+.an-dock button.on { background: var(--c); color: #0d1117; }
+.an-dock button.on small { color: rgba(13,17,23,.75); }
+.an-dock button:disabled { opacity: .4; pointer-events: none; }
+.an-dock .sep { width: 1px; background: var(--line2); margin: 4px 2px; }
+.an-hud { position: absolute; left: 50%; top: 52px; transform: translateX(-50%); z-index: 5; max-width: min(860px, 92%); text-align: center; pointer-events: none;
+  background: rgba(13,17,23,.82); backdrop-filter: blur(8px); border: 1px solid var(--line2); border-radius: 12px; padding: 10px 20px;
+  transition: opacity .35s; opacity: 0; }
+.an-hud.show { opacity: 1; }
+.an-hud .h1 { font-size: 22px; font-weight: 650; color: var(--text); letter-spacing: .2px; }
+.an-hud .h2 { font-size: 14px; color: var(--muted); margin-top: 3px; }
+.an-hud .good { color: #5ad17a; } .an-hud .bad { color: #ff9f5a; }

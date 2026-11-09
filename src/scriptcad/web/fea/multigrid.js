@@ -429,16 +429,98 @@ async function pipelines(device) {
   return pipes;
 }
 
-/** MG-PCG solve of a problem blob on `solver.device` (a VoxelSolver). */
-export async function solveMG(solver, blob, { tol = 1e-6, maxIter = 2000, checkEvery = 5, onProgress, rule = 'average',
+const HIER = new WeakMap();                     // blob -> its multigrid levels (see solveMG)
+
+/** Cheap fingerprint of the stiffness and held DOFs: changes whenever a voxel or a support does. */
+function signature(P) {
+  let a = 0, b = 0;
+  for (let i = 0; i < P.emod.length; i++) a += P.emod[i] * ((i % 9973) + 1);
+  for (let i = 0; i < P.fixed.length; i++) b += P.fixed[i] * ((i % 9967) + 1);
+  return `${P.emod.length}:${a}:${b}`;
+}
+
+/**
+ * A solution of one problem as a first guess for another: the displacements `u` of parsed
+ * blob `from`, interpolated (trilinear) at the nodes of parsed blob `to`. A slightly changed
+ * part (Pull's next step, a live re-run) then starts its solve close to the answer. Only
+ * nodes of `from`'s solid count (the rest hold zeros), and a node beyond them takes the
+ * nearest ones within a few voxels: material that is new must move with its neighbours, or
+ * the guess has a step in it that is worse than no guess at all.
+ */
+export function transfer(from, u, to) {
+  const out = new Float32Array(to.ndof);
+  const NX = from.nx + 1, NY = from.ny + 1, NZ = from.nz + 1;
+  const act = new Uint8Array(NX * NY * NZ);
+  for (let k = 0; k < from.nz; k++) for (let j = 0; j < from.ny; j++) for (let i = 0; i < from.nx; i++) {
+    if (!from.emod[i + from.nx * (j + from.ny * k)]) continue;
+    for (let a = 0; a < 8; a++) act[(i + (a & 1)) + NX * ((j + ((a >> 1) & 1)) + NY * (k + ((a >> 2) & 1)))] = 1;
+  }
+  const need = new Uint8Array((to.nx + 1) * (to.ny + 1) * (to.nz + 1));   // the nodes of `to`'s solid
+  for (let k = 0; k < to.nz; k++) for (let j = 0; j < to.ny; j++) for (let i = 0; i < to.nx; i++) {
+    if (!to.emod[i + to.nx * (j + to.ny * k)]) continue;
+    for (let a = 0; a < 8; a++) need[(i + (a & 1)) + (to.nx + 1) * ((j + ((a >> 1) & 1)) + (to.ny + 1) * (k + ((a >> 2) & 1)))] = 1;
+  }
+  // the same lattice (one voxel size, origins whole voxels apart): most nodes copy straight
+  const off = [0, 1, 2].map(c => (to.origin[c] - from.origin[c]) / from.h);
+  const lattice = to.h === from.h && off.every(o => Math.abs(o - Math.round(o)) < 1e-3);
+  const clamp = (x, n) => Math.min(Math.max(x, 0), n);
+  for (let K = 0, n = 0; K <= to.nz; K++) for (let J = 0; J <= to.ny; J++) for (let I = 0; I <= to.nx; I++, n++) {
+    if (!need[n]) continue;
+    if (lattice) {
+      const i = I + Math.round(off[0]), j = J + Math.round(off[1]), k = K + Math.round(off[2]);
+      const m = i + NX * (j + NY * k);
+      if (i >= 0 && j >= 0 && k >= 0 && i < NX && j < NY && k < NZ && act[m]) {
+        out[3 * n] = u[3 * m]; out[3 * n + 1] = u[3 * m + 1]; out[3 * n + 2] = u[3 * m + 2];
+        continue;
+      }
+    }
+    const g = [(to.origin[0] + to.h * I - from.origin[0]) / from.h, (to.origin[1] + to.h * J - from.origin[1]) / from.h,
+               (to.origin[2] + to.h * K - from.origin[2]) / from.h];
+    // the cell around the node, widened ring by ring until it holds solid nodes
+    for (let r = 0; r <= 3; r++) {
+      const i0 = clamp(Math.floor(g[0]) - r, NX - 1), i1 = clamp(Math.floor(g[0]) + 1 + r, NX - 1);
+      const j0 = clamp(Math.floor(g[1]) - r, NY - 1), j1 = clamp(Math.floor(g[1]) + 1 + r, NY - 1);
+      const k0 = clamp(Math.floor(g[2]) - r, NZ - 1), k1 = clamp(Math.floor(g[2]) + 1 + r, NZ - 1);
+      let W = 0, x = 0, y = 0, z = 0;
+      for (let k = k0; k <= k1; k++) for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const m = i + NX * (j + NY * k);
+        if (!act[m]) continue;
+        // trilinear inside the cell, inverse distance beyond it
+        const w = r ? 1 / (1e-6 + Math.hypot(i - g[0], j - g[1], k - g[2])) ** 2
+                    : Math.max(0, 1 - Math.abs(i - g[0])) * Math.max(0, 1 - Math.abs(j - g[1])) * Math.max(0, 1 - Math.abs(k - g[2]));
+        if (!w) continue;
+        W += w; x += w * u[3 * m]; y += w * u[3 * m + 1]; z += w * u[3 * m + 2];
+      }
+      if (W > 1e-9) { out[3 * n] = x / W; out[3 * n + 1] = y / W; out[3 * n + 2] = z / W; break; }
+    }
+  }
+  return out;
+}
+
+/**
+ * MG-PCG solve of a problem blob on `solver.device` (a VoxelSolver). signal: an AbortSignal
+ * that stops the solve between iterations (it then throws an AbortError). x0: a first guess
+ * (ndof displacements, e.g. from transfer()), else zero.
+ */
+export async function solveMG(solver, blob, { tol = 1e-6, maxIter = 2000, checkEvery = 5, onProgress, signal, x0 = null, rule = 'average',
                                              nu = 2, smoother = 'chebyshev', ratio = 8, omega = null, coarseDofs = 200,
                                              coarseIters = 100, maxLevels = 12 } = {}) {
   const d = solver.device;
   const pipes = await pipelines(d);
   const P = parse(blob);
   const t0 = performance.now();
-  const { levels: lv, desc, stop } = hierarchy(P, { rule, coarseDofs, maxLevels });
-  const lmax = spectralBound(P.ke);
+  // the coarse levels depend only on which voxels are solid and which DOFs are held; Push to
+  // load re-solves one blob with new forces many times, so keep them while those are unchanged
+  const sig = signature(P), key = JSON.stringify([rule, coarseDofs, maxLevels]);
+  let cached = HIER.get(blob);
+  if (!cached || cached.sig !== sig || cached.key !== key) {
+    const h = hierarchy(P, { rule, coarseDofs, maxLevels });
+    cached = { sig, key, ...h, lmax: spectralBound(P.ke) };
+    HIER.set(blob, cached);
+  }
+  const { levels: lv, desc, stop, lmax } = cached;
+  P.active ??= lv[0].active;
+  lv[0] = P;                                    // this call's views (same buffer, current forces)
   const coef = smootherCoefficients(lmax, nu, smoother, ratio, omega);
   const owned = [];
   const buf = (data, usage = GPUBufferUsage.STORAGE) => {
@@ -484,7 +566,12 @@ export async function solveMG(solver, blob, { tol = 1e-6, maxIter = 2000, checkE
   for (let i = 0; i < P.ndof; i++) if (!P.fixed[i] && L0.dinvH[i] > 0) { f[i] = P.force[i]; fn += f[i] * f[i]; }
   fn = Math.sqrt(fn);
   const z0 = () => buf(new Float32Array(P.ndof));
-  const O = { u: z0(), r: buf(f), rold: z0(), z: z0(), p: z0(), ap: z0(), sc: buf(new Float32Array(8)) };
+  let u0 = null;
+  if (x0) {                                       // the guess, held DOFs and empty nodes at zero
+    u0 = new Float32Array(P.ndof);
+    for (let i = 0; i < P.ndof; i++) if (!P.fixed[i] && L0.dinvH[i] > 0) u0[i] = x0[i];
+  }
+  const O = { u: u0 ? buf(u0) : z0(), r: buf(f), rold: z0(), z: z0(), p: z0(), ap: z0(), sc: buf(new Float32Array(8)) };
   const scc = buf(new Float32Array(8));
   const parts = buf(new Float32Array(L0.dotGrid[0] * L0.dotGrid[1]));
 
@@ -559,9 +646,10 @@ export async function solveMG(solver, blob, { tol = 1e-6, maxIter = 2000, checkE
   await d.queue.onSubmittedWorkDone();
   const tSetup = performance.now();
 
-  // z = M f, p = z, rz
+  // r = f - K u0 (with a first guess), z = M r, p = z, rz
   let enc = d.createCommandEncoder();
   let pass = enc.beginComputePass();
+  if (u0) encode(pass, [applyOp(L0, O.u, O.r, 1)]);
   encode(pass, vcycle);
   pass.end();
   enc.copyBufferToBuffer(O.z, 0, O.p, 0, P.ndof * 4);
@@ -573,6 +661,10 @@ export async function solveMG(solver, blob, { tol = 1e-6, maxIter = 2000, checkE
   let it = 0, rel = 1;
   const hist = [];
   while (it < maxIter) {
+    if (signal?.aborted) {
+      for (const b of [...owned, read]) b.destroy();
+      throw new DOMException('solve cancelled', 'AbortError');
+    }
     enc = d.createCommandEncoder();
     pass = enc.beginComputePass();
     const steps = Math.min(checkEvery, maxIter - it);

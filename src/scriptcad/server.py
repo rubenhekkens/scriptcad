@@ -244,21 +244,60 @@ def analyze(payload: dict = Body(...)):
         cid, blob, meta = fea_analyze.build(geom, setup)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    # the stress post-processing caches build while the browser solves
+    threading.Thread(target=fea_analyze.prepare, args=(cid,), daemon=True).start()
     return Response(blob, media_type="application/octet-stream",
                     headers={"X-Case-Id": cid, "X-Meta": json.dumps(meta)})
 
 
 @app.post("/api/analyze/result")
-async def analyze_result(request: Request, id: str, field: bool = True):
-    """Stresses for a solved case; field=false sends the statistics only (no display mesh)."""
+async def analyze_result(request: Request, id: str, field: bool = True, values: bool = False):
+    """Stresses for a solved case; field=false sends the statistics only (no display mesh),
+    values=true the field values without the mesh (which a case keeps)."""
     if fea_analyze is None:
         raise HTTPException(501, "analysis is not available")
     import numpy as np
     u = np.frombuffer(await request.body(), dtype="<f4")
     try:
         res = await run_in_threadpool(fea_analyze.result, id, u, field)
-        return Response(fea_analyze.result_blob(res) if field else b"", media_type="application/octet-stream",
+        return Response(fea_analyze.result_blob(res, values) if field else b"", media_type="application/octet-stream",
                         headers={"X-Stats": json.dumps(res["stats"])})
+    except KeyError as e:
+        raise HTTPException(410, str(e.args[0]))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/transcribe/warm")
+def transcribe_warm():
+    """Start Whisper in the background (the model takes seconds to load), so the first spoken
+    command is quick."""
+    from . import speech
+    threading.Thread(target=speech.warm, daemon=True).start()
+    return {"ok": True}
+
+
+@app.post("/api/transcribe")
+async def transcribe(request: Request, prompt: str = "", type: str = "audio/webm"):
+    """A spoken command, recorded in the browser, as text (Whisper on this computer)."""
+    from . import speech
+    suffix = {"audio/webm": ".webm", "audio/ogg": ".ogg", "audio/mp4": ".m4a", "audio/wav": ".wav"}.get(type.split(";")[0], ".webm")
+    try:
+        heard = await run_in_threadpool(speech.transcribe, await request.body(), suffix, prompt)
+        print(f"voice: heard {heard['text']!r}", flush=True)        # to see what a command that failed was heard as
+        return heard
+    except speech.SpeechError as e:
+        raise HTTPException(503, str(e))
+
+
+@app.post("/api/analyze/shape")
+async def analyze_shape(id: str, payload: dict = Body(...)):
+    """How the compliance of a solved case changes if its body became payload["positions"]
+    (first order, from the solution's strain energy): Pull's hints, without solving again."""
+    if fea_analyze is None:
+        raise HTTPException(501, "analysis is not available")
+    try:
+        return await run_in_threadpool(fea_analyze.shape_change, id, payload.get("positions", []))
     except KeyError as e:
         raise HTTPException(410, str(e.args[0]))
     except ValueError as e:

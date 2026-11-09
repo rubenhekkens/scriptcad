@@ -149,6 +149,29 @@ export function parse(buf) {
   return { nx, ny, nz, nn, nsolid, h, origin, ke, emod, fixed, force, ndof: 3 * nn };
 }
 
+/** A VXF1 blob (dense held flags and forces, as parse() and the solvers read) from a VXF1 or a
+ *  VXF2 one (the server's wire format: held flags as bits, forces as a sparse list). */
+export function inflate(buf) {
+  const magic = String.fromCharCode(...new Uint8Array(buf, 0, 4));
+  if (magic === 'VXF1') return buf;
+  if (magic !== 'VXF2') throw new Error('not a voxel problem blob');
+  const dv = new DataView(buf);
+  const [nx, ny, nz, nn] = [4, 8, 12, 16].map(o => dv.getUint32(o, true));
+  const nvox = nx * ny * nz, ndof = 3 * nn, dense = 44 + 4 * (576 + nvox);
+  const out = new ArrayBuffer(dense + 8 * ndof);
+  new Uint8Array(out).set(new Uint8Array(buf, 0, dense));
+  new Uint8Array(out, 0, 4).set([86, 88, 70, 49]);               // 'VXF1'
+  const fixed = new Uint32Array(out, dense, ndof), force = new Float32Array(out, dense + 4 * ndof, ndof);
+  let o = dense;
+  const count = () => { const n = dv.getUint32(o, true); o += 4; return n; };
+  const bits = new Uint8Array(buf, o, Math.ceil(ndof / 8));
+  for (let i = 0; i < ndof; i++) fixed[i] = (bits[i >> 3] >> (i & 7)) & 1;
+  o += 4 * Math.ceil(ndof / 32);
+  const nl = count(), loaded = new Uint32Array(buf.slice(o, o + 4 * nl)), f = new Float32Array(buf.slice(o + 4 * nl, o + 8 * nl));
+  loaded.forEach((i, k) => { force[i] = f[k]; });
+  return out;
+}
+
 export async function gpuInfo() {
   if (!navigator.gpu) return null;
   const a = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });

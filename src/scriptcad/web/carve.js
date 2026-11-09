@@ -152,7 +152,7 @@ export function createCarve({ S, setup, gate, viewer, bodyLabel, buildCase, gpuS
       <div class="muted small">Carves <b>${esc(bodyLabel(a.body))}</b> on its voxel grid: solve, drop the voxels that work least, solve
         again. Material at supports and loads stays, and nothing grows outside the original shape.</div>
       <div class="field"><label for="cv_keep">Keep at least</label><select id="cv_keep" data-cv="keep">
-        ${[0.05, 0.08, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7].map(v => `<option value="${v}" ${v === c.keep ? 'selected' : ''}>${Math.round(v * 100)}% of the material</option>`).join('')}</select></div>
+        ${[...new Set([0.05, 0.08, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, c.keep])].sort((a, b) => a - b).map(v => `<option value="${v}" ${v === c.keep ? 'selected' : ''}>${Math.round(v * 100)}% of the material</option>`).join('')}</select></div>
       <div class="field"><label for="cv_defl" title="Stop at the lightest design whose largest displacement stays within this">Max deflection</label>
         <div class="unit-in"><input id="cv_defl" type="number" step="any" min="0" data-cv="defl" value="${c.defl ?? ''}" placeholder="none"><span>µm</span></div></div>
       <div class="field"><label for="cv_detail" title="Smoothing radius: thicker members are easier to make and to redraw">Smallest member</label><select id="cv_detail" data-cv="detail">
@@ -196,5 +196,5 @@ export function createCarve({ S, setup, gate, viewer, bodyLabel, buildCase, gpuS
   // the model changed: the carved design belongs to the old geometry
   function reset() { stop(); run = null; progress = ''; viewer.setVoxelPreview(null); }
 
-  return { html, onClick, onChange, reset, busy: () => !!token };
+  return { html, onClick, onChange, reset, start, cfg, busy: () => !!token, progressText: () => progress };
 }

@@ -26,6 +26,7 @@ export function fieldColor(t) {
   }
   return RAMP[RAMP.length - 1][1];
 }
+let FIELD_LUT = null;
 
 export class Viewer {
   constructor(host, gizmoCanvas) {
@@ -55,10 +56,13 @@ export class Viewer {
     this.camera.add(fill);
     this.scene.add(this.camera);
 
+    // model space (mm, Z up) lives in `world`: identity on screen, scaled and turned upright in VR
+    this.world = new THREE.Group();
+    this.scene.add(this.world);
     this.root = new THREE.Group();
-    this.scene.add(this.root);
+    this.world.add(this.root);
     this.overlay = new THREE.Group();
-    this.scene.add(this.overlay);
+    this.world.add(this.overlay);
     this.grid = null;
     this.size = 100;
     this._makeGrid(200);
@@ -82,13 +86,17 @@ export class Viewer {
     this._bindPointer();
     new ResizeObserver(() => this._resize()).observe(host);
     this._resize();
-    const loop = () => {
-      requestAnimationFrame(loop);
-      this.controls.update();
+    // the renderer's loop, not requestAnimationFrame: a VR headset drives its own frame rate
+    this.onFrame = null;
+    this.tickers = new Set();     // more per-frame callbacks (an animation that runs in VR too)
+    this.renderer.setAnimationLoop(() => {
+      const xr = this.renderer.xr.isPresenting;
+      if (!xr) this.controls.update();
       this._updateClipRange();
-      this._render();
-    };
-    loop();
+      this.onFrame?.();
+      for (const t of this.tickers) t();
+      this._render(xr);
+    });
   }
 
   // ---- scene content ------------------------------------------------------
@@ -325,6 +333,86 @@ export class Viewer {
     return hits[0] || null;
   }
 
+  /** Surface hit along the raycaster's ray: body, point and outward normal in model space (mm). */
+  hitRay(raycaster = this.raycaster) {
+    const meshes = [...this.bodies.values()].filter(b => b.group.visible && b.mesh.visible).map(b => b.mesh);
+    const hit = raycaster.intersectObjects(meshes, false)[0];
+    if (!hit || !hit.face) return null;
+    // meshes sit untransformed in `world`, so their own space is model space
+    return { bodyId: hit.object.userData.bodyId, point: this.world.worldToLocal(hit.point.clone()).toArray(),
+             normal: hit.face.normal.toArray() };
+  }
+
+  /** Hide a body's CAD edges (Pull to shape shows other geometry than they outline). */
+  hideEdges(id) { const b = this.bodies.get(id); if (b) b.edges.visible = false; }
+
+  /** hitRay for a pointer event. */
+  hitAt(e) { this._ray(e); return this.hitRay(); }
+
+  /** An arrow pressing on `point` along `dir` (model space, mm); null removes it. */
+  setArrow(point, dir, length = 0, color = 0xffd23f) {
+    if (this._arrow) { this.world.remove(this._arrow); this._arrow.dispose(); this._arrow = null; }
+    if (!point || !(length > 0)) return;
+    const d = new THREE.Vector3(...dir).normalize();
+    const from = new THREE.Vector3(...point).addScaledVector(d, -length);
+    this._arrow = new THREE.ArrowHelper(d, from, length, color, 0.3 * length, 0.18 * length);
+    this._arrow.renderOrder = 10;
+    this._arrow.traverse(o => { if (o.material) { o.material.depthTest = false; o.material.transparent = true; } });
+    this.world.add(this._arrow);              // not in overlay: highlights rebuild that on every hover
+  }
+
+  /**
+   * Arrows with labels (Pull's hints), in model space: [{ from, dir, length, color, label }].
+   * The labels face the camera and keep a size relative to the arrow. [] removes them.
+   */
+  setHints(items) {
+    if (this._hints) {
+      this.world.remove(this._hints);
+      this._hints.traverse(o => { o.geometry?.dispose(); o.material?.map?.dispose(); o.material?.dispose(); });
+      this._hints = null;
+    }
+    if (!items.length) return;
+    this._hints = new THREE.Group();
+    for (const h of items) {
+      const d = new THREE.Vector3(...h.dir).normalize(), from = new THREE.Vector3(...h.from);
+      const arrow = new THREE.ArrowHelper(d, from, h.length, h.color, 0.32 * h.length, 0.2 * h.length);
+      arrow.traverse(o => { if (o.material) { o.material.depthTest = false; o.material.transparent = true; } o.renderOrder = 11; });
+      this._hints.add(arrow);
+      if (!h.label) continue;
+      const canvas = document.createElement('canvas'), g = canvas.getContext('2d');
+      canvas.width = 512; canvas.height = 96;
+      g.fillStyle = 'rgba(13,17,23,0.8)';
+      g.beginPath(); g.roundRect(0, 0, 512, 96, 20); g.fill();
+      g.font = '600 46px system-ui, sans-serif';
+      const fit = Math.min(1, 472 / g.measureText(h.label).width);
+      g.font = `600 ${46 * fit}px system-ui, sans-serif`;
+      g.fillStyle = '#' + new THREE.Color(h.color).getHexString();
+      g.textBaseline = 'middle';
+      g.fillText(h.label, 20, 50);
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false, transparent: true }));
+      const tip = from.clone().addScaledVector(d, h.length * 1.25);
+      sprite.position.copy(tip);
+      sprite.center.set(d.x < -0.5 ? 1 : d.x > 0.5 ? 0 : 0.5, d.z < -0.5 ? 1 : 0);   // beyond the tip, away from the part
+      sprite.scale.set(2.2 * h.length, 2.2 * h.length * 96 / 512, 1);
+      sprite.renderOrder = 12;
+      this._hints.add(sprite);
+    }
+    this.world.add(this._hints);
+  }
+
+  /** Outline a shape (flat positions, model space) as it was, to compare a changed body with; null removes it. */
+  setGhost(positions = null) {
+    if (this._ghost) { this.world.remove(this._ghost); this._ghost.geometry.dispose(); this._ghost.material.dispose(); this._ghost = null; }
+    if (!positions) return;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(Float32Array.from(positions), 3));
+    this._ghost = new THREE.LineSegments(new THREE.EdgesGeometry(g, 25),
+      new THREE.LineBasicMaterial({ color: 0x9fd2ff, transparent: true, opacity: 0.55, depthTest: false }));
+    g.dispose();
+    this._ghost.renderOrder = 9;
+    this.world.add(this._ghost);
+  }
+
   pick(e) {
     const scr = this._ray(e);
     const hit = this._meshHit();
@@ -486,10 +574,12 @@ export class Viewer {
   setField(id, values, cap, displacement = null, mesh = null, color = fieldColor) {
     const b = this.bodies.get(id);
     if (!b) return false;
-    if (mesh) {
+    if (mesh && mesh.positions !== b.fieldPositions) {
       // a result comes on its own, finer copy of the body's mesh (a flat CAD face is only
-      // two triangles, far too coarse to show a stress field); keep the CAD mesh to restore
+      // two triangles, far too coarse to show a stress field); keep the CAD mesh to restore.
+      // Push to load sends the same mesh with every update: then only the values change.
       b.cadGeometry ??= b.mesh.geometry;
+      b.fieldPositions = mesh.positions;
       const fine = new THREE.BufferGeometry();
       // a copy: the deformed view writes into this array, and the result must stay undeformed
       fine.setAttribute('position', new THREE.BufferAttribute(mesh.positions.slice(), 3));
@@ -503,30 +593,48 @@ export class Viewer {
     }
     const g = b.mesh.geometry;
     const n = values.length;
-    const col = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) col.set(color(values[i] / cap), 3 * i);
-    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    b.mesh.material.vertexColors = true;
+    let attr = g.getAttribute('color');
+    if (!attr || attr.count !== n) g.setAttribute('color', attr = new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    const col = attr.array;
+    if (color === fieldColor) {                 // the stress ramp from a table: Push to load recolours often
+      FIELD_LUT ??= Float32Array.from({ length: 3 * 1024 }, (_, i) => fieldColor((i / 3 | 0) / 1023)[i % 3]);
+      const k = 1023 / cap;
+      for (let i = 0; i < n; i++) {
+        const j = 3 * Math.min(1023, Math.max(0, Math.round(values[i] * k)));
+        col[3 * i] = FIELD_LUT[j]; col[3 * i + 1] = FIELD_LUT[j + 1]; col[3 * i + 2] = FIELD_LUT[j + 2];
+      }
+    } else for (let i = 0; i < n; i++) col.set(color(values[i] / cap), 3 * i);
+    attr.needsUpdate = true;
+    if (!b.mesh.material.vertexColors) {        // a recompile: only when the colours first appear
+      b.mesh.material.vertexColors = true;
+      b.mesh.material.needsUpdate = true;
+    }
     b.mesh.material.color.set(0xffffff);
-    b.mesh.material.needsUpdate = true;
     b.basePositions ??= g.getAttribute('position').array.slice();
     b.displacement = displacement;
-    this.setDeformation(this.deformScale || 0);
+    this._deform(b, this.deformOnly && !this.deformOnly.has(id) ? 0 : this.deformScale || 0);
     return true;
   }
 
-  /** Show displacements scaled by `scale` on every body that has a field (0 = undeformed). */
-  setDeformation(scale) {
+  /**
+   * Show displacements scaled by `scale` on every body that has a field (0 = undeformed),
+   * or only on the bodies in the Set `only` (Push to load bends just the part pushed on).
+   */
+  setDeformation(scale, only = null) {
     this.deformScale = scale;
-    for (const b of this.bodies.values()) {
-      if (!b.basePositions) continue;
-      const pos = b.mesh.geometry.getAttribute('position');
-      const base = b.basePositions, d = b.displacement;
-      for (let i = 0; i < base.length; i++) pos.array[i] = base[i] + (d && scale ? scale * d[i] : 0);
-      pos.needsUpdate = true;
-      b.mesh.geometry.computeBoundingSphere();
-      b.edges.visible = !scale && (this.display.edges || this.display.wire);
-    }
+    this.deformOnly = only;
+    for (const [id, b] of this.bodies) this._deform(b, only && !only.has(id) ? 0 : scale);
+  }
+
+  _deform(b, scale) {
+    if (!b.basePositions) return;
+    const pos = b.mesh.geometry.getAttribute('position');
+    const base = b.basePositions, d = b.displacement, a = pos.array;
+    if (d && scale) for (let i = 0; i < base.length; i++) a[i] = base[i] + scale * d[i];
+    else a.set(base);
+    pos.needsUpdate = true;
+    b.mesh.geometry.computeBoundingSphere();
+    b.edges.visible = !scale && (this.display.edges || this.display.wire);
   }
 
   /**
@@ -562,6 +670,7 @@ export class Viewer {
         b.mesh.geometry = b.cadGeometry;
         b.cadGeometry = null;
         b.displayTriFace = null;
+        b.fieldPositions = null;
       } else if (b.basePositions) {
         const g = b.mesh.geometry;
         g.getAttribute('position').array.set(b.basePositions);
@@ -657,6 +766,11 @@ export class Viewer {
   }
 
   _updateClipRange() {
+    // in VR, three.js hands near/far to the headset, and the room is in metres: 2 cm to 50 m
+    if (this.renderer.xr.isPresenting) {
+      if (this.camera.near !== 0.02) { this.camera.near = 0.02; this.camera.far = 50; this.camera.updateProjectionMatrix(); }
+      return;
+    }
     // keep depth precision proportional to the orbit distance
     const d = this.camera.position.distanceTo(this.controls.target);
     const near = Math.max(d / 500, 1e-4), far = d * 50 + this.size * 4;
@@ -667,9 +781,9 @@ export class Viewer {
     }
   }
 
-  _render() {
+  _render(xr = false) {
     this.renderer.render(this.scene, this.camera);
-    if (this.gz) {
+    if (this.gz && !xr) {
       this.gz.group.quaternion.copy(this.camera.quaternion).invert();
       this.gz.renderer.render(this.gz.scene, this.gz.camera);
     }
