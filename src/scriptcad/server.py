@@ -35,6 +35,25 @@ WEB = Path(str(files("scriptcad") / "web"))
 UPLOADS = user_data_path("scriptcad", appauthor=False) / "uploads"
 UPLOADS.mkdir(parents=True, exist_ok=True)
 TIMEOUT = float(os.environ.get("SCRIPTCAD_TIMEOUT", "90"))
+# The online demo (SCRIPTCAD_PUBLIC=1, see deploy/huggingface): the server is shared and
+# reachable by anyone, so nothing that runs code or reads the server's files is allowed:
+# no Script tab, no script exports, imports only of files uploaded here, no voice and no
+# benchmark endpoints.
+PUBLIC = os.environ.get("SCRIPTCAD_PUBLIC") == "1"
+NOT_ONLINE = "isn't available in the online demo - install ScriptCAD to use it: https://github.com/rubenhekkens/scriptcad"
+
+
+def _guard(doc):
+    """In the online demo, a document may import only files uploaded to this server."""
+    if not PUBLIC:
+        return doc
+    root = UPLOADS.resolve()
+    for f in (doc or {}).get("features", []):
+        if f.get("type") == "import":
+            path = Path(str((f.get("params") or {}).get("file", ""))).resolve()
+            if root not in path.parents:
+                raise HTTPException(403, "imports must be files uploaded in this session")
+    return doc
 
 
 def _worker_init():
@@ -109,7 +128,7 @@ async def revalidate_static(request: Request, call_next):
 
 @app.get("/api/info")
 def info():
-    return worker.run("warmup", timeout=120)
+    return {**worker.run("warmup", timeout=120), "public": PUBLIC}
 
 
 @app.get("/api/names")
@@ -119,11 +138,13 @@ def names():
 
 @app.post("/api/regen")
 def regen(payload: dict = Body(...)):
-    return worker.run("regen", payload.get("doc", {}), payload.get("quality", "normal"))
+    return worker.run("regen", _guard(payload.get("doc", {})), payload.get("quality", "normal"))
 
 
 @app.post("/api/script")
 def script(payload: dict = Body(...)):
+    if PUBLIC:
+        raise HTTPException(403, f"The Script tab runs Python on the server, so it {NOT_ONLINE}")
     return worker.run("run_script", payload.get("code", ""), payload.get("quality", "normal"))
 
 
@@ -142,7 +163,9 @@ def export(payload: dict = Body(...)):
     if fmt not in EXPORTS:
         raise HTTPException(400, f"unknown format {fmt}")
     suffix, default_name = EXPORTS[fmt]
-    source = {"code": payload.get("code", "")} if payload.get("mode") == "script" else {"doc": payload.get("doc", {})}
+    if PUBLIC and payload.get("mode") == "script":
+        raise HTTPException(403, f"Exporting a script {NOT_ONLINE}")
+    source = {"code": payload.get("code", "")} if payload.get("mode") == "script" else {"doc": _guard(payload.get("doc", {}))}
     fd, path = tempfile.mkstemp(suffix=suffix, prefix="scriptcad_")
     os.close(fd)
     if fmt == "step":
@@ -170,7 +193,7 @@ async def upload(request: Request, filename: str = "model.usda"):
     if ext not in USD_EXT | STEP_EXT:
         raise HTTPException(400, "import .step/.stp files, or .usd/.usda/.usdc files with BRep data")
     data = await request.body()
-    if len(data) > 200 * 1024 * 1024:
+    if len(data) > (25 if PUBLIC else 200) * 1024 * 1024:
         raise HTTPException(413, "file too large")
     stem = f"{uuid.uuid4().hex[:8]}_{re.sub(r'[^\w.-]+', '_', Path(filename).name)}"
     name = Path(filename).name
@@ -220,7 +243,8 @@ async def http_error(_request, exc: HTTPException):
 try:  # the FEA endpoints need the optional `sim` extra (NumPy/SciPy)
     from .fea.web import router as fea_router
     from .fea import analyze as fea_analyze
-    app.include_router(fea_router)
+    if not PUBLIC:                     # the benchmark endpoints: not for a shared server
+        app.include_router(fea_router)
 except ImportError:
     fea_analyze = None
 
@@ -239,7 +263,7 @@ def analyze(payload: dict = Body(...)):
         raise HTTPException(501, 'analysis needs the simulation extra: pip install "scriptcad[sim]"')
     setup = payload.get("setup", {})
     groups = {"fixed": setup.get("fixed", []), "load": (setup.get("load") or {}).get("faces", [])}
-    geom = worker.run("analysis_geometry", payload.get("doc", {}), setup.get("body"), groups)
+    geom = worker.run("analysis_geometry", _guard(payload.get("doc", {})), setup.get("body"), groups)
     try:
         cid, blob, meta = fea_analyze.build(geom, setup)
     except ValueError as e:
@@ -272,6 +296,8 @@ async def analyze_result(request: Request, id: str, field: bool = True, values: 
 def transcribe_warm():
     """Start Whisper in the background (the model takes seconds to load), so the first spoken
     command is quick."""
+    if PUBLIC:
+        raise HTTPException(403, f"Voice {NOT_ONLINE}")
     from . import speech
     threading.Thread(target=speech.warm, daemon=True).start()
     return {"ok": True}
@@ -280,6 +306,8 @@ def transcribe_warm():
 @app.post("/api/transcribe")
 async def transcribe(request: Request, prompt: str = "", type: str = "audio/webm"):
     """A spoken command, recorded in the browser, as text (Whisper on this computer)."""
+    if PUBLIC:
+        raise HTTPException(403, f"Voice {NOT_ONLINE}")
     from . import speech
     suffix = {"audio/webm": ".webm", "audio/ogg": ".ogg", "audio/mp4": ".m4a", "audio/wav": ".wav"}.get(type.split(";")[0], ".webm")
     try:
@@ -311,6 +339,8 @@ def main():
 
     parser = argparse.ArgumentParser(prog="scriptcad", description="CAD in the browser on NVIDIA's USD BRep kernel.")
     parser.add_argument("--port", type=int, default=int(os.environ.get("SCRIPTCAD_PORT", "8765")))
+    parser.add_argument("--host", default=os.environ.get("SCRIPTCAD_HOST", "127.0.0.1"),
+                        help="address to listen on (0.0.0.0 in a container)")
     parser.add_argument("--no-browser", action="store_true", help="don't open a browser tab")
     parser.add_argument("--install-step-tools", action="store_true",
                         help="download the STEP converters now instead of on first use, then exit")
@@ -320,11 +350,11 @@ def main():
         if not step_io.ocp_available():
             print('note: STEP also needs OpenCASCADE: pip install "scriptcad[step]"')
         return
-    url = f"http://127.0.0.1:{args.port}"
+    url = f"http://{'127.0.0.1' if args.host in ('0.0.0.0', '::') else args.host}:{args.port}"
     print(f"ScriptCAD running at {url}  (Ctrl+C to stop)")
     if not args.no_browser:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
-    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 
 if __name__ == "__main__":

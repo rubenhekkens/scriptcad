@@ -1188,13 +1188,17 @@ renderAll();
 (async () => {
   try {
     const info = await api('/api/info');
-    $('#kernelTag').textContent = `USD BRep ${info.usd_brep} · SMLib`;
+    $('#kernelTag').textContent = `USD BRep ${info.usd_brep} · SMLib${info.public ? ' · online demo' : ''}`;
     setKernel('ok', 'Kernel ready');
+    S.public = !!info.public;
+    // the online demo: no Script tab and no voice (the server is shared); a first visit opens the chair
+    if (S.public) document.body.classList.add('public');
     api('/api/names').then(n => { S.names = n; }).catch(() => {});
   } catch (e) {
     setKernel('bad', 'Kernel unavailable: ' + e.message);
     return;
   }
-  if (saved?.mode === 'script') setMode('script');
+  if (saved?.mode === 'script' && !S.public) setMode('script');
+  if (S.public && !S.doc.features.length) { loadExample('examples/bone_chair.json', { analyze: true }); return; }
   if (S.doc.features.length) scheduleRegen(0);
 })();

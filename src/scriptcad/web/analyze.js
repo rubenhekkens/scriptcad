@@ -639,6 +639,7 @@ export function createAnalyze({ S, viewer, toast, bodies, bodyLabel, refOf, onCh
     catch (e) { setVoiceText(e.message); return { heard: text, done: null, error: e.message }; }
   }
   function voiceSection() {
+    if (S.public) return '';                     // the online demo has no voice
     return `<div class="panel-h sub explore-h"><span>Voice</span></div>
       <div class="muted small">Hold the button and say a command: “set H to 50”, “increase slab T by 2”, “rebalance”,
         “carve the solid slab”, “carve the truss to 20 percent”, “push”, “pull”, “tap”, “undo”, “stop”. Whisper writes it down on this computer (nothing leaves it).</div>

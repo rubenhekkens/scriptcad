@@ -328,3 +328,6 @@ table.explore-vars td:last-child { text-align: right; font: 11.5px var(--mono); 
 .an-hud .h1 { font-size: 22px; font-weight: 650; color: var(--text); letter-spacing: .2px; }
 .an-hud .h2 { font-size: 14px; color: var(--muted); margin-top: 3px; }
 .an-hud .good { color: #5ad17a; } .an-hud .bad { color: #ff9f5a; }
+
+/* the online demo (server in public mode): no Script tab, no voice */
+body.public [data-mode="script"], body.public [data-dock="voice"], body.public .voice-only { display: none !important; }
