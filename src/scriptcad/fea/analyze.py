@@ -26,6 +26,7 @@ MATERIALS = {   # key: (label, E MPa, Poisson, density g/cm3)
     "steel": ("Steel", 210_000.0, 0.30, 7.85),
     "aluminium": ("Aluminium", 70_000.0, 0.33, 2.70),
     "titanium": ("Titanium Ti-6Al-4V", 114_000.0, 0.34, 4.43),
+    "birch": ("Birch plywood (along the face grain)", 9_000.0, 0.30, 0.68),
     "pa6gf30": ("PA6-GF30 (glass-filled nylon)", 9_000.0, 0.35, 1.36),
     "abs": ("ABS", 2_300.0, 0.35, 1.05),
     "pla": ("PLA", 3_500.0, 0.36, 1.24),
