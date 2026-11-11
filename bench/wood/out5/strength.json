@@ -1,0 +1,35 @@
+{
+ "seated person (seat 1.6 kN + back 0.5 kN)": {
+  "member_MPa": 0.63,
+  "peak_MPa": 1.33,
+  "deflection_mm": 0.07,
+  "margin": 20.3,
+  "faces": [
+   10,
+   104
+  ],
+  "h_mm": 4.26
+ },
+ "hard lean back (0.6 kN, top of the back)": {
+  "member_MPa": 1.59,
+  "peak_MPa": 6.54,
+  "deflection_mm": 0.79,
+  "margin": 4.1,
+  "faces": [
+   10,
+   24
+  ],
+  "h_mm": 4.26
+ },
+ "sideways push (0.3 kN, seat loaded 1.0 kN)": {
+  "member_MPa": 1.31,
+  "peak_MPa": 3.43,
+  "deflection_mm": 0.54,
+  "margin": 7.9,
+  "faces": [
+   10,
+   56
+  ],
+  "h_mm": 4.26
+ }
+}
